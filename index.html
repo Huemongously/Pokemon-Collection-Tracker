@@ -61,6 +61,14 @@
         #moves-list::-webkit-scrollbar-thumb {
             background: #6b7280; /* gray-500 */
         }
+        /* Party slot styles */
+        .party-slot-occupied .remove-party-overlay {
+            opacity: 0;
+            transition: opacity 0.2s ease-in-out;
+        }
+        .party-slot-occupied:hover .remove-party-overlay {
+            opacity: 1;
+        }
     </style>
 </head>
 <body class="bg-gray-900 text-white">
@@ -72,7 +80,7 @@
             <p class="text-gray-400 mt-2">Now with Regional Forms! Your progress is saved automatically.</p>
         </header>
 
-        <!-- Search and Stats Bar -->
+        <!-- Search, Filters, and Party Bar -->
         <div class="sticky top-0 z-10 bg-gray-900/80 backdrop-blur-sm py-4 mb-6">
             <div class="flex flex-col md:flex-row gap-4 items-center">
                 <input type="text" id="search-input" placeholder="Search by name or Pokédex number..."
@@ -83,6 +91,16 @@
                 </select>
                 <div id="stats" class="text-lg font-semibold text-gray-300 whitespace-nowrap">
                     Collected: <span id="collected-count" class="text-green-400 font-bold">0</span> / <span id="total-count" class="text-yellow-400 font-bold">...</span>
+                </div>
+            </div>
+            <!-- Collapsible Party Section -->
+            <div id="party-section" class="mt-6">
+                <div id="party-header" class="flex justify-between items-center cursor-pointer p-3 bg-gray-800 rounded-lg hover:bg-gray-700 transition">
+                     <h2 class="text-xl font-bold text-yellow-400">My Competitive Party</h2>
+                     <svg id="party-arrow" class="w-6 h-6 text-gray-400 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
+                </div>
+                <div id="party-grid" class="hidden grid grid-cols-3 sm:grid-cols-6 gap-2 md:gap-4 mt-2">
+                    <!-- Party slots will be injected here -->
                 </div>
             </div>
         </div>
@@ -115,7 +133,7 @@
         // --- Firebase SDK Imports ---
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, getDoc, setDoc, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getFirestore, doc, getDoc, setDoc, updateDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         // --- PWA Service Worker Registration ---
         if ('serviceWorker' in navigator) {
@@ -140,11 +158,15 @@
         const toastMessage = document.getElementById('toast-message');
         const modal = document.getElementById('pokedex-modal');
         const modalContent = document.getElementById('modal-content');
+        const partyGrid = document.getElementById('party-grid');
+        const partyHeader = document.getElementById('party-header');
+        const partyArrow = document.getElementById('party-arrow');
 
         // --- App State ---
         let allPokemon = []; // The complete, final list (including all forms)
         let currentlyDisplayedPokemon = []; // The list currently visible in the grid
         let collection = new Set();
+        let currentParty = [];
         let toastTimeout;
         const pokemonDetailsCache = {};
         const gamePokemonCache = {}; // Cache for game filter results
@@ -152,29 +174,15 @@
         // --- Firebase State ---
         let app, db, auth, userId;
         let isPersistenceEnabled = false; // Flag to control collection saving
-        const POKEMON_COLLECTION = 'pokemonCollection';
+        const USER_DATA_DOC = 'userData';
 
         // --- Type Colors ---
         const typeColors = {
             normal: 'bg-gray-400', fire: 'bg-red-500', water: 'bg-blue-500', electric: 'bg-yellow-400', grass: 'bg-green-500', ice: 'bg-cyan-300 text-gray-800', fighting: 'bg-orange-700', poison: 'bg-purple-600', ground: 'bg-yellow-600', flying: 'bg-indigo-400', psychic: 'bg-pink-500', bug: 'bg-lime-500', rock: 'bg-stone-500', ghost: 'bg-indigo-800', dragon: 'bg-violet-700', dark: 'bg-gray-700', steel: 'bg-slate-500', fairy: 'bg-pink-300 text-gray-800'
         };
-
-        // --- Static Smogon Data Fallback ---
-        const SMOGON_FALLBACK_DATA = {
-            // NOTE: This is a curated subset. In a real app, this could be expanded.
-            "venusaur": { nature: "Modest", heldItem: "Life Orb", evDistribution: { spread: "252 SpA / 4 SpD / 252 Spe", ivs: "Max IVs in SpA, Spe. 0 Atk IVs." }, strategy: "A powerful sun sweeper with Chlorophyll. Aims to outspeed and deal massive damage with its special attacks under harsh sunlight.", moveset: [{ name: "Growth", reason: "Boosts Attack and Special Attack, doubling in sun." }, { name: "Giga Drain", reason: "STAB move that provides recovery." }, { name: "Sludge Bomb", reason: "Strong Poison STAB for Fairy-types." }, { name: "Weather Ball", reason: "Becomes a 100 BP Fire-type move in sun, providing excellent coverage." }] },
-            "charizard": { nature: "Timid", heldItem: "Heavy-Duty Boots", evDistribution: { spread: "252 SpA / 4 SpD / 252 Spe", ivs: "Max IVs in SpA, Spe. 0 Atk IVs." }, strategy: "A special wallbreaker and sweeper that isn't afraid of entry hazards thanks to Heavy-Duty Boots. It can pivot and apply pressure throughout the game.", moveset: [{ name: "Flamethrower", reason: "Reliable and powerful Fire STAB." }, { name: "Air Slash", reason: "Secondary STAB with a chance to cause flinching." }, { name: "Focus Blast", reason: "Provides crucial coverage against Rock and Steel types." }, { name: "Roost", reason: "Increases longevity by providing reliable recovery." }] },
-            "blastoise": { nature: "Modest", heldItem: "White Herb", evDistribution: { spread: "4 Def / 252 SpA / 252 Spe", ivs: "Max IVs in SpA, Spe. 0 Atk IVs." }, strategy: "A classic Shell Smash sweeper. White Herb negates the defense drops from Shell Smash, allowing Blastoise to set up and attempt a sweep with its boosted Speed and Special Attack.", moveset: [{ name: "Shell Smash", reason: "The core of the set, massively boosting offensive stats." }, { name: "Surf", reason: "Consistent and powerful Water STAB." }, { name: "Ice Beam", reason: "Essential coverage against Dragon and Grass types." }, { name: "Dark Pulse", reason: "Hits Psychic and Ghost types super effectively." }] },
-            "pikachu": { nature: "Jolly", heldItem: "Light Ball", evDistribution: { spread: "252 Atk / 4 Def / 252 Spe", ivs: "Max all relevant stats." }, strategy: "A glass cannon that hits incredibly hard with Light Ball doubling its Attack and Special Attack. Aims to revenge kill or sweep late-game.", moveset: [{ name: "Volt Tackle", reason: "Extremely powerful STAB, though it causes recoil damage." }, { name: "Fake Out", reason: "Guaranteed flinch on the first turn." }, { name: "Knock Off", reason: "Removes items from opponents, crippling them." }, { name: "Play Rough", reason: "Coverage for Dragon types." }] },
-            "gengar": { nature: "Timid", heldItem: "Focus Sash", evDistribution: { spread: "252 SpA / 4 SpD / 252 Spe", ivs: "Max IVs in SpA, Spe. 0 Atk IVs." }, strategy: "A fast special attacker that excels at revenge killing. Focus Sash allows it to survive one hit to retaliate. Its typing provides useful immunities.", moveset: [{ name: "Shadow Ball", reason: "Primary STAB move with good neutral coverage." }, { name: "Sludge Wave", reason: "Strong Poison STAB that hits Fairy-types." }, { name: "Focus Blast", reason: "Coverage for Dark and Steel types that resist its STABs." }, { name: "Nasty Plot", reason: "Can be used on a predicted switch to set up a sweep." }] },
-            "tyranitar": { nature: "Adamant", heldItem: "Choice Band", evDistribution: { spread: "252 Atk / 4 Def / 252 Spe", ivs: "Max all relevant stats." }, strategy: "A powerful wallbreaker that uses its immense Attack stat, boosted by Choice Band, to punch holes in defensive teams. Sand Stream provides chip damage and boosts its Special Defense.", moveset: [{ name: "Stone Edge", reason: "High-power Rock STAB." }, { name: "Crunch", reason: "Reliable Dark STAB." }, { name: "Earthquake", reason: "Excellent coverage against Steel-types." }, { name: "Ice Punch", reason: "Hits Ground and Dragon types for super-effective damage." }] },
-            "gardevoir": { nature: "Timid", heldItem: "Choice Scarf", evDistribution: { spread: "252 SpA / 4 SpD / 252 Spe", ivs: "Max IVs in SpA, Spe. 0 Atk IVs." }, strategy: "A fast revenge killer and late-game cleaner with Choice Scarf. Its great Special Attack and typing allow it to threaten many common offensive threats.", moveset: [{ name: "Moonblast", reason: "Powerful and reliable Fairy STAB." }, { name: "Psyshock", reason: "Psychic STAB that targets the opponent's physical defense." }, { name: "Mystical Fire", reason: "Coverage against Steel-types that also lowers their Special Attack." }, { name: "Trick", reason: "Can cripple defensive walls by trading them the Choice Scarf." }] }
-        };
-
-        // --- Utility Functions for Network Resilience ---
-        function delay(ms) {
-            return new Promise(resolve => setTimeout(resolve, ms));
-        }
+        
+        // --- Utility Functions for Network Resilience & Strategy Generation ---
+        function delay(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
 
         async function fetchWithRetry(url, retries = 3, options = {}) {
             for (let i = 0; i < retries; i++) {
@@ -187,19 +195,69 @@
                     return response;
                 } catch (error) {
                     console.warn(`Fetch attempt ${i + 1} failed for ${url}. Retrying...`, error.message);
-                    if (i < retries - 1) {
-                        await delay(1000 * (i + 1)); // Delay: 1s, 2s, 3s...
-                    } else {
-                        throw new Error(`Failed to fetch ${url} after ${retries} attempts.`);
-                    }
+                    if (i < retries - 1) await delay(1000 * (i + 1));
+                    else throw new Error(`Failed to fetch ${url} after ${retries} attempts.`);
                 }
             }
         }
-        // --- Initialization and Data Loading ---
 
+        function generateStatBasedStrategy(details) {
+            const stats = {};
+            details.stats.forEach(s => { stats[s.name.replace('-', '')] = s.value; });
+
+            let role, nature, evSpread, strategy, item;
+            const isPhysical = stats.attack > stats.specialattack;
+            const isFast = stats.speed >= 100;
+            const isBulky = stats.hp > 90 || stats.defense > 90 || stats.specialdefense > 90;
+
+            if (isFast && (stats.attack > 90 || stats.specialattack > 90)) {
+                role = isPhysical ? "Fast Physical Sweeper" : "Fast Special Sweeper";
+                nature = isPhysical ? "Jolly" : "Timid";
+                evSpread = `4 HP / ${isPhysical ? '252 Atk' : '252 SpA'} / 252 Spe`;
+                item = "Life Orb or Choice Scarf";
+                strategy = `This build maximizes ${details.name}'s high Speed and ${isPhysical ? 'Attack' : 'Special Attack'} to outspeed and eliminate threats. It functions best as a late-game cleaner or revenge killer.`;
+            } else if (isBulky && !isFast) {
+                const isPhysicallyBulky = stats.defense > stats.specialdefense;
+                role = isPhysicallyBulky ? "Physical Wall" : "Special Wall";
+                nature = isPhysicallyBulky ? "Bold" : "Calm";
+                evSpread = `252 HP / ${isPhysicallyBulky ? '252 Def' : '252 SpD'} / 4 SpA`;
+                item = "Leftovers or Heavy-Duty Boots";
+                strategy = `This build leverages ${details.name}'s natural bulk to absorb hits. It aims to wear down opponents with status moves and pivot out to teammates.`;
+            } else {
+                role = isPhysical ? "Bulky Physical Attacker" : "Bulky Special Attacker";
+                nature = isPhysical ? "Adamant" : "Modest";
+                evSpread = `252 HP / ${isPhysical ? '252 Atk' : '252 SpA'} / 4 Def`;
+                item = "Assault Vest or Life Orb";
+                strategy = `A balanced build that combines decent offensive pressure with significant bulk, allowing ${details.name} to both take hits and deal considerable damage in return.`;
+            }
+            
+            // Intelligent Move Selection
+            const allMoves = details.moves;
+            const stabMoves = [], coverageMoves = [], utilityMoves = [];
+            const goodCoverage = ['ice beam', 'thunderbolt', 'flamethrower', 'earthquake', 'focus blast', 'dark pulse', 'play rough'];
+            const goodUtility = ['stealth rock', 'spikes', 'toxic spikes', 'roost', 'recover', 'will o wisp', 'thunder wave', 'swords dance', 'nasty plot', 'calm mind', 'rapid spin'];
+
+            allMoves.forEach(move => {
+                if (goodUtility.includes(move)) utilityMoves.push({name: move, reason: "High-value utility/setup move."});
+                else if (goodCoverage.includes(move)) coverageMoves.push({name: move, reason: "Excellent coverage against common types."});
+                else if (Math.random() > 0.5) stabMoves.push({name: move, reason: "Primary STAB attack for consistent damage."}); // Simplified STAB selection
+            });
+
+            let moveset = [ ...utilityMoves.slice(0,1), ...coverageMoves.slice(0,1), ...stabMoves.slice(0,2) ].slice(0,4);
+            if (moveset.length < 4) {
+                moveset = moveset.concat(allMoves.slice(0, 4 - moveset.length).map(m => ({name: m, reason: "General purpose attack."})));
+            }
+
+            return {
+                nature, heldItem: item, evDistribution: { spread: evSpread, ivs: `Max IVs in primary stats. ${isPhysical ? (stats.specialattack < 60 ? "0 SpA IVs." : "") : (stats.attack < 60 ? "0 Atk IVs." : "")}`},
+                strategy: `${strategy} This is an auto-generated set based on base stats.`,
+                moveset
+            };
+        }
+
+        // --- Initialization and App Start ---
         async function initializeFirebase() {
             const firebaseConfigStr = typeof __firebase_config !== 'undefined' ? __firebase_config : '{}';
-            
             try {
                 const firebaseConfig = JSON.parse(firebaseConfigStr);
                 if (!firebaseConfig.apiKey) throw new Error("Missing API Key");
@@ -212,9 +270,9 @@
                 onAuthStateChanged(auth, async (user) => {
                     if (user) {
                         userId = user.uid;
-                        await loadCollectionFromFirestore();
-                        // Re-render to show collected status immediately after data is loaded
+                        await loadUserDataFromFirestore();
                         renderPokemon(currentlyDisplayedPokemon, gameFilter.value === 'all' ? null : gamePokemonCache[gameFilter.value.split(',')[0].trim()]);
+                        renderParty();
                     } else if (typeof __initial_auth_token === 'undefined') {
                         await signInAnonymously(auth);
                     }
@@ -223,39 +281,29 @@
                 if (typeof __initial_auth_token !== 'undefined' && !auth.currentUser) {
                     await signInWithCustomToken(auth, __initial_auth_token);
                 }
-
             } catch (error) {
                 console.warn("Persistence Disabled: Firebase configuration error detected. Collection saving is unavailable.", error);
                 isPersistenceEnabled = false;
             }
         }
 
-        // --- Core Application Logic (Refactored for non-blocking startup) ---
-
         async function startDataLoading() {
-            // 1. Guaranteed Loader Display
             loader.style.display = 'flex';
-            loader.innerHTML = `
-                <div class="animate-spin rounded-full h-16 w-16 border-t-4 border-b-4 border-yellow-400"></div>
-                <p class="mt-4 text-yellow-400">Fetching Pokémon data (Quick Load)...</p>
-            `;
+            loader.innerHTML = `<div class="animate-spin rounded-full h-16 w-16 border-t-4 border-b-4 border-yellow-400"></div><p class="mt-4 text-yellow-400">Fetching Pokémon data (Quick Load)...</p>`;
             grid.classList.add('hidden');
 
             try {
-                // 2. Fast Initial Load (Gen 1)
                 const initialPokemon = await fetchInitialPokemonList();
-                allPokemon = initialPokemon; // Temporarily use Gen 1 data as the 'allPokemon' list
+                allPokemon = initialPokemon;
                 currentlyDisplayedPokemon = allPokemon;
-                renderPokemon(currentlyDisplayedPokemon); // Render fast Gen 1 list
+                renderPokemon(currentlyDisplayedPokemon); 
                 loader.style.display = 'none';
                 grid.classList.remove('hidden');
                 
-                // 3. Detachable Full Load: DO NOT await this Promise. It runs in the background.
                 fetchFullDataInBackground();
 
             } catch (error) {
                 console.error("CRITICAL: Failed to load initial Kanto data.", error);
-                // If the initial small load fails, show a final, permanent network error.
                 loader.style.display = 'flex';
                 loader.innerHTML = `<div class="text-center text-red-400"><h3 class="text-xl font-bold">Network Error</h3><p>Could not load initial Pokémon data. Please check your network connection and refresh.</p></div>`;
                 grid.classList.add('hidden');
@@ -266,23 +314,14 @@
             try {
                 console.log("Starting full background data fetch and filtering...");
                 
-                const [fullPokemonList] = await Promise.all([
-                    fetchFullPokemonData(),
-                    fetchGameFilters()
-                ]);
-                
-                // 4. Update state with the full, comprehensive list
+                const [fullPokemonList] = await Promise.all([ fetchFullPokemonData(), fetchGameFilters() ]);
                 allPokemon = fullPokemonList;
                 allPokemon.sort((a, b) => a.speciesId !== b.speciesId ? a.speciesId - b.speciesId : a.name.localeCompare(b.name));
                 currentlyDisplayedPokemon = allPokemon;
-                
-                // Re-render the grid to show all forms and update total count
                 renderPokemon(currentlyDisplayedPokemon); 
                 console.log(`Full Pokémon dataset loaded and rendered. Total forms: ${allPokemon.length}`);
                 showToast("Full Pokédex data loaded in background!", true);
-
             } catch (error) {
-                // Background failure: Log error, but DO NOT interrupt the already loaded Kanto grid.
                 console.error("Background Load Failed: Full Pokédex/Filter data could not be loaded. Functionality may be limited.", error);
                 showToast("Warning: Full Pokédex data failed to load. Displaying limited dataset.", false);
             }
@@ -294,14 +333,7 @@
              try {
                 const response = await fetchWithRetry('https://pokeapi.co/api/v2/pokemon?limit=151', 3);
                 const data = await response.json();
-                
-                // Only return basic data for the first 151
-                return data.results.map((p, index) => ({
-                    id: `${index + 1}-${p.name}`, 
-                    speciesId: index + 1,
-                    name: p.name,
-                    imageUrl: `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/${index + 1}.png`
-                }));
+                return data.results.map((p, index) => ({ id: `${index + 1}-${p.name}`, speciesId: index + 1, name: p.name, imageUrl: `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/${index + 1}.png` }));
             } catch(error) {
                 throw new Error(`Failed to load initial Gen 1 data: ${error.message}`);
             }
@@ -313,37 +345,25 @@
                 const speciesData = await speciesResponse.json();
                 
                 const pokemonList = [];
-                const chunkSize = 20; // Load 20 species details at a time
+                const chunkSize = 20;
                 const speciesResults = speciesData.results;
 
                 for (let i = 0; i < speciesResults.length; i += chunkSize) {
                     const chunk = speciesResults.slice(i, i + chunkSize);
-                    
-                    // Fire 20 requests in parallel
                     const speciesDetailsPromises = chunk.map(s => fetchWithRetry(s.url).then(res => res.json()));
-                    const speciesDetailsChunk = await Promise.all(speciesDetailsPromises); // Await the 20 results
+                    const speciesDetailsChunk = await Promise.all(speciesDetailsPromises);
 
-                    // Process varieties
                     for (const species of speciesDetailsChunk) {
                         for (const variety of species.varieties) {
                             const name = variety.pokemon.name;
                             if (name.includes('-gmax') || name.includes('-totem') || name.includes('starter') || name.includes('partner')) continue;
-                            
                             const pokemonUrlParts = variety.pokemon.url.split('/');
                             const pokemonId = parseInt(pokemonUrlParts[pokemonUrlParts.length - 2]);
-                            
-                            pokemonList.push({
-                                id: `${species.id}-${name}`,
-                                speciesId: species.id,
-                                name: name,
-                                imageUrl: `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/${pokemonId}.png`
-                            });
+                            pokemonList.push({ id: `${species.id}-${name}`, speciesId: species.id, name: name, imageUrl: `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/${pokemonId}.png` });
                         }
                     }
                 }
-                
                 return pokemonList;
-
             } catch (error) {
                 throw new Error(`Failed to fetch full Pokémon list and forms: ${error.message}`);
             }
@@ -371,10 +391,7 @@
                     processedGroups.add(vg.name);
                     if (dlcGroups[vg.name]) {
                         const relatedDlcs = internationalVersionGroups.filter(ivg => dlcGroups[vg.name].includes(ivg.name));
-                        relatedDlcs.forEach(dlc => {
-                            addOption(dlc.name, `↳ ${formatGameName(dlc.name)}`);
-                            processedGroups.add(dlc.name);
-                        });
+                        relatedDlcs.forEach(dlc => { addOption(dlc.name, `↳ ${formatGameName(dlc.name)}`); processedGroups.add(dlc.name); });
                         if (relatedDlcs.length > 0) {
                             const allGroupNames = [vg.name, ...relatedDlcs.map(d => d.name)].join(',');
                             addOption(allGroupNames, `${formatGameName(vg.name)} (Complete Edition)`);
@@ -394,10 +411,7 @@
             if(!pokedexUrl) throw new Error(`No Pokedex found for ${groupName}`);
 
             const pokedexData = await fetchWithRetry(pokedexUrl).then(res => res.json());
-            const orderedEntries = pokedexData.pokemon_entries.map(entry => ({
-                pokedexNumber: entry.entry_number,
-                speciesId: parseInt(entry.pokemon_species.url.split('/').slice(-2, -1)[0])
-            })).sort((a, b) => a.pokedexNumber - b.pokedexNumber);
+            const orderedEntries = pokedexData.pokemon_entries.map(entry => ({ pokedexNumber: entry.entry_number, speciesId: parseInt(entry.pokemon_species.url.split('/').slice(-2, -1)[0]) })).sort((a, b) => a.pokedexNumber - b.pokedexNumber);
             
             gamePokemonCache[groupName] = orderedEntries;
             return orderedEntries;
@@ -407,7 +421,6 @@
             if (pokemonDetailsCache[pokemonName]) return pokemonDetailsCache[pokemonName];
             try {
                 const pokemonRes = await fetchWithRetry(`https://pokeapi.co/api/v2/pokemon/${pokemonName}`);
-                if (!pokemonRes.ok) throw new Error('Pokemon data not found');
                 const data = await pokemonRes.json();
                 const speciesRes = await fetchWithRetry(data.species.url);
                 const speciesData = await speciesRes.json();
@@ -432,32 +445,19 @@
         
         async function getAIStrategyGuide(details) {
             if (pokemonDetailsCache[details.name]?.strategyGuide) return pokemonDetailsCache[details.name].strategyGuide;
-
-            // FIX: If running on external host (persistence disabled), use Smogon fallback.
             if (!isPersistenceEnabled) {
-                const baseName = details.name.split('-')[0]; // Use base name for lookup (e.g., 'charizard' from 'charizard-gmax')
-                const strategy = SMOGON_FALLBACK_DATA[baseName];
-                if (strategy) {
-                    // Make a copy to avoid mutation issues
-                    const formattedStrategy = JSON.parse(JSON.stringify(strategy));
-                    // Smogon data doesn't have "reasons", so we create a simpler moveset display
-                    formattedStrategy.moveset = formattedStrategy.moveset.map(move => ({ name: move.name, reason: move.reason || "Primary STAB/Coverage" }));
-                    pokemonDetailsCache[details.name].strategyGuide = formattedStrategy;
-                    return formattedStrategy;
-                } else {
-                    return { error: "Smogon competitive data for this Pokémon is not available in the local fallback." };
-                }
+                console.warn("Using stat-based fallback for competitive analysis.");
+                const strategy = generateStatBasedStrategy(details);
+                pokemonDetailsCache[details.name].strategyGuide = strategy;
+                return strategy;
             }
 
-            // Original logic for Canvas environment
             const apiKey = "";
             const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${apiKey}`;
             const statsString = details.stats.map(s => `${s.name}: ${s.value}`).join(', ');
             const prompt = `Given the following Pokémon data, provide a detailed strategy guide in a minified JSON format. The JSON object must have these exact keys: "nature", "heldItem", "evDistribution", "strategy", and "moveset". - "nature" must be a string. - "heldItem" must be a string. - "evDistribution" must be an object with two string keys: "spread" (e.g., "252 SpA / 4 SpD / 252 Spe") and "ivs" (e.g., "0 Atk IVs, max all others"). - "strategy" must be a concise paragraph (2-3 sentences). - "moveset" must be an array of exactly 4 objects, where each object has a "name" (string) and "reason" (string). Pokémon: ${formatPokemonName(details.name)}, Types: ${details.types.join('/')}, Abilities: ${details.abilities.map(capitalize).join('/')}, Base Stats: ${statsString}.`;
             try {
-                // Reduced retries to 1 for this resource-intensive, often-blocked call
                 const response = await fetchWithRetry(apiUrl, 1, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }) });
-                if (!response.ok) throw new Error(`API request failed with status ${response.status}`);
                 const result = await response.json();
                 const text = result.candidates?.[0]?.content?.parts?.[0]?.text;
                 if (!text) throw new Error("No content in API response.");
@@ -471,7 +471,7 @@
             }
         }
 
-        // --- Rendering & UI (Functions remain the same) ---
+        // --- Rendering & UI ---
         function renderPokemon(pokemonList, orderMap = null) {
             grid.innerHTML = '';
             if (pokemonList.length === 0) {
@@ -501,6 +501,28 @@
             }
             updateStats();
         }
+        
+        function renderParty() {
+            partyGrid.innerHTML = '';
+            for (let i = 0; i < 6; i++) {
+                const pokemon = currentParty[i];
+                const slot = document.createElement('div');
+                if (pokemon) {
+                    slot.className = 'party-slot-occupied relative bg-gray-800 border-2 border-gray-700 rounded-lg p-2 text-center cursor-pointer transition-all duration-300 hover:border-red-500';
+                    slot.innerHTML = `
+                        <img src="${pokemon.imageUrl}" alt="${formatPokemonName(pokemon.name)}" class="w-16 h-16 mx-auto" loading="lazy">
+                        <p class="text-xs truncate font-semibold mt-1">${formatPokemonName(pokemon.name)}</p>
+                        <div class="remove-party-overlay absolute inset-0 bg-red-600 bg-opacity-75 flex items-center justify-center rounded-lg">
+                            <span class="text-white font-bold text-sm">Remove</span>
+                        </div>`;
+                    slot.addEventListener('click', () => removeFromParty(pokemon.id));
+                } else {
+                    slot.className = 'bg-gray-800 border-2 border-dashed border-gray-700 rounded-lg flex items-center justify-center h-28';
+                    slot.innerHTML = `<span class="text-gray-600 text-3xl">+</span>`;
+                }
+                partyGrid.appendChild(slot);
+            }
+        }
 
         async function showPokedexModal(pokemon) {
             modal.classList.remove('hidden');
@@ -514,13 +536,12 @@
             }
 
             const isCollected = collection.has(details.id);
+            const isInParty = currentParty.some(p => p.id === details.id);
+            const isPartyFull = currentParty.length >= 6;
+
             const typesHtml = details.types.map(type => `<span class="px-3 py-1 text-sm font-semibold rounded-full ${typeColors[type] || 'bg-gray-500'}">${capitalize(type)}</span>`).join('');
             const abilitiesHtml = details.abilities.map(ability => `<li class="capitalize">${ability}</li>`).join('');
-            const statsHtml = details.stats.map(stat => `
-                <div class="flex items-center"><span class="w-1/3 text-sm font-semibold capitalize text-gray-400">${stat.name.replace('special-', 'Sp. ')}</span>
-                    <div class="w-2/3 bg-gray-600 rounded-full h-4">
-                        <div class="stat-bar-fill h-4 rounded-full bg-yellow-400 text-right pr-2 text-xs font-bold text-gray-900" style="width: 0%;" data-width="${(stat.value / 255) * 100}%">${stat.value}</div>
-                    </div></div>`).join('');
+            const statsHtml = details.stats.map(stat => `<div class="flex items-center"><span class="w-1/3 text-sm font-semibold capitalize text-gray-400">${stat.name.replace('special-', 'Sp. ')}</span><div class="w-2/3 bg-gray-600 rounded-full h-4"><div class="stat-bar-fill h-4 rounded-full bg-yellow-400 text-right pr-2 text-xs font-bold text-gray-900" style="width: 0%;" data-width="${(stat.value / 255) * 100}%">${stat.value}</div></div></div>`).join('');
 
             modalContent.innerHTML = `
                 <div class="p-6 relative">
@@ -539,28 +560,37 @@
                         <div><h3 class="font-bold text-lg mb-2 border-b border-gray-700 pb-1">Abilities</h3><ul class="list-disc list-inside text-gray-300">${abilitiesHtml}</ul></div>
                         <div><h3 class="font-bold text-lg mb-2 border-b border-gray-700 pb-1">Base Stats</h3><div class="space-y-2">${statsHtml}</div></div>
                         <div id="moves-section">
-                            <h3 class="font-bold text-lg mb-2 border-b border-gray-700 pb-1 cursor-pointer flex justify-between items-center" id="moves-header">
-                                <span>Learnable Moves (${details.moves.length})</span>
-                                <svg id="moves-arrow" class="w-4 h-4 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
-                            </h3>
-                            <div id="moves-content" class="hidden space-y-2 pt-2">
-                                <input type="text" id="move-search-input" placeholder="Search moves..." class="w-full bg-gray-700 border border-gray-600 text-white rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-yellow-500 focus:outline-none transition">
-                                <div id="moves-list" class="max-h-48 overflow-y-auto pr-2 flex flex-wrap gap-2"></div>
-                            </div>
+                            <h3 class="font-bold text-lg mb-2 border-b border-gray-700 pb-1 cursor-pointer flex justify-between items-center" id="moves-header"><span>Learnable Moves (${details.moves.length})</span><svg id="moves-arrow" class="w-4 h-4 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg></h3>
+                            <div id="moves-content" class="hidden space-y-2 pt-2"><input type="text" id="move-search-input" placeholder="Search moves..." class="w-full bg-gray-700 border border-gray-600 text-white rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-yellow-500 focus:outline-none transition"><div id="moves-list" class="max-h-48 overflow-y-auto pr-2 flex flex-wrap gap-2"></div></div>
                         </div>
-                        <div id="ai-strategy-section">
-                            <h3 class="font-bold text-lg mb-2 border-b border-gray-700 pb-1">Competitive Strategy</h3>
-                            <div id="ai-loader" class="flex items-center justify-center space-x-2 py-4">
-                                <div class="loading-dot w-3 h-3 bg-yellow-400 rounded-full"></div><div class="loading-dot w-3 h-3 bg-yellow-400 rounded-full"></div><div class="loading-dot w-3 h-3 bg-yellow-400 rounded-full"></div>
-                            </div>
-                        </div>
+                        <div id="ai-strategy-section"><h3 class="font-bold text-lg mb-2 border-b border-gray-700 pb-1">Competitive Strategy</h3><div id="ai-loader" class="flex items-center justify-center space-x-2 py-4"><div class="loading-dot w-3 h-3 bg-yellow-400 rounded-full"></div><div class="loading-dot w-3 h-3 bg-yellow-400 rounded-full"></div><div class="loading-dot w-3 h-3 bg-yellow-400 rounded-full"></div></div></div>
                     </div>
-                    <button id="toggle-collection-btn" class="w-full mt-6 py-3 font-bold rounded-lg transition ${isCollected ? 'bg-red-600 hover:bg-red-700' : 'bg-green-600 hover:bg-green-700'}">${isCollected ? 'Remove from Collection' : 'Add to Collection'}</button>
+                    <div class="flex gap-2 mt-6">
+                        <button id="toggle-collection-btn" class="w-1/2 py-3 font-bold rounded-lg transition ${isCollected ? 'bg-red-600 hover:bg-red-700' : 'bg-green-600 hover:bg-green-700'}">${isCollected ? 'Remove from Collection' : 'Add to Collection'}</button>
+                        <button id="toggle-party-btn" class="w-1/2 py-3 font-bold rounded-lg transition"></button>
+                    </div>
                 </div>`;
             
             setTimeout(() => { document.querySelectorAll('.stat-bar-fill').forEach(bar => bar.style.width = bar.dataset.width); }, 100);
             document.getElementById('close-modal').addEventListener('click', closeModal);
             document.getElementById('toggle-collection-btn').addEventListener('click', () => toggleCollection(details));
+            
+            // Party Button Logic
+            const partyBtn = document.getElementById('toggle-party-btn');
+            if (isInParty) {
+                partyBtn.textContent = "Remove from Party";
+                partyBtn.className = "w-1/2 py-3 font-bold rounded-lg transition bg-red-600 hover:bg-red-700";
+                partyBtn.onclick = () => { removeFromParty(details.id); closeModal(); };
+            } else if (isPartyFull) {
+                partyBtn.textContent = "Party is Full";
+                partyBtn.className = "w-1/2 py-3 font-bold rounded-lg transition bg-gray-600 cursor-not-allowed";
+                partyBtn.disabled = true;
+            } else {
+                partyBtn.textContent = "Add to Party";
+                partyBtn.className = "w-1/2 py-3 font-bold rounded-lg transition bg-blue-600 hover:bg-blue-700";
+                partyBtn.onclick = () => { addToParty(details); closeModal(); };
+            }
+
 
             const movesHeader = document.getElementById('moves-header'), movesContent = document.getElementById('moves-content'), movesArrow = document.getElementById('moves-arrow'), moveSearchInput = document.getElementById('move-search-input'), movesListContainer = document.getElementById('moves-list');
             const allMoves = details.moves;
@@ -574,13 +604,7 @@
             const strategy = await getAIStrategyGuide(details);
             const aiSection = document.getElementById('ai-strategy-section');
             document.getElementById('ai-loader').style.display = 'none';
-            aiSection.innerHTML += strategy.error ? `<p class="text-red-400 text-center">${strategy.error}</p>` : `<div class="text-sm space-y-2">
-                <p><strong class="text-gray-400">Recommended Nature:</strong> ${strategy.nature}</p>
-                <p><strong class="text-gray-400">Suggested Held Item:</strong> ${strategy.heldItem}</p>
-                ${strategy.evDistribution ? `<p><strong class="text-gray-400">EV Spread:</strong> ${strategy.evDistribution.spread}</p><p><strong class="text-gray-400">IV Priority:</strong> ${strategy.evDistribution.ivs}</p>` : ''}
-                <p><strong class="text-gray-400">Strategy:</strong> ${strategy.strategy}</p>
-                <h4 class="font-semibold text-base mt-2">Example Moveset:</h4>
-                <ul class="list-disc list-inside ml-2">${strategy.moveset.map(m => `<li class="mb-1"><strong class="capitalize text-yellow-400">${m.name.replace(/-/g,' ')}:</strong> <span class="text-gray-300">${m.reason}</span></li>`).join('')}</ul></div>`;
+            aiSection.innerHTML += strategy.error ? `<p class="text-gray-400 text-sm italic text-center p-4">${strategy.error}</p>` : `<div class="text-sm space-y-2"><p><strong class="text-gray-400">Recommended Nature:</strong> ${strategy.nature}</p><p><strong class="text-gray-400">Suggested Held Item:</strong> ${strategy.heldItem}</p>${strategy.evDistribution ? `<p><strong class="text-gray-400">EV Spread:</strong> ${strategy.evDistribution.spread}</p><p><strong class="text-gray-400">IV Priority:</strong> ${strategy.evDistribution.ivs}</p>` : ''}<p><strong class="text-gray-400">Strategy:</strong> ${strategy.strategy}</p><h4 class="font-semibold text-base mt-2">Example Moveset:</h4><ul class="list-disc list-inside ml-2">${strategy.moveset.map(m => `<li class="mb-1"><strong class="capitalize text-yellow-400">${m.name.replace(/-/g,' ')}:</strong> <span class="text-gray-300">${m.reason}</span></li>`).join('')}</ul></div>`;
         }
 
         function closeModal() {
@@ -600,24 +624,46 @@
         function toggleCollection(pokemonDetails) {
             const pokemonId = pokemonDetails.id;
             const card = document.getElementById(`poke-${pokemonId}`);
-            const btn = document.getElementById('toggle-collection-btn');
-            
             if (collection.has(pokemonId)) {
                 collection.delete(pokemonId);
                 showToast(`${formatPokemonName(pokemonDetails.name)} removed from collection.`, false);
                 if(card) card.classList.remove('collected');
-                if (btn) { btn.textContent = 'Add to Collection'; btn.className = 'w-full mt-6 py-3 font-bold rounded-lg transition bg-green-600 hover:bg-green-700'; }
             } else {
                 collection.add(pokemonId);
                 showToast(`${formatPokemonName(pokemonDetails.name)} added to collection!`, true);
                 if(card) card.classList.add('collected');
-                if (btn) { btn.textContent = 'Remove from Collection'; btn.className = 'w-full mt-6 py-3 font-bold rounded-lg transition bg-red-600 hover:bg-red-700'; }
             }
             updateStats();
-            // Only attempt to save if running in a valid Firebase environment
-            if (isPersistenceEnabled) {
-                saveCollectionToFirestore();
+            if (isPersistenceEnabled) saveUserDataToFirestore();
+        }
+
+        function addToParty(pokemonDetails) {
+            if (currentParty.length >= 6) {
+                showToast("Your party is full! Remove a Pokémon to add another.", false);
+                return;
             }
+            if (currentParty.some(p => p.id === pokemonDetails.id)) {
+                showToast(`${formatPokemonName(pokemonDetails.name)} is already in your party.`, false);
+                return;
+            }
+            currentParty.push({
+                id: pokemonDetails.id,
+                name: pokemonDetails.name,
+                imageUrl: pokemonDetails.imageUrl
+            });
+            renderParty();
+            showToast(`${formatPokemonName(pokemonDetails.name)} added to your party!`, true);
+            if (isPersistenceEnabled) saveUserDataToFirestore();
+        }
+
+        function removeFromParty(pokemonId) {
+            const pokemon = currentParty.find(p => p.id === pokemonId);
+            if (!pokemon) return;
+
+            currentParty = currentParty.filter(p => p.id !== pokemonId);
+            renderParty();
+            showToast(`${formatPokemonName(pokemon.name)} removed from your party.`, false);
+            if (isPersistenceEnabled) saveUserDataToFirestore();
         }
 
         async function handleGameFilterChange() {
@@ -628,7 +674,7 @@
             let orderMap = null;
 
             if (selectedValue === 'all') {
-                currentlyDisplayedPokemon = [...allPokemon]; // Use a copy
+                currentlyDisplayedPokemon = [...allPokemon];
                 currentlyDisplayedPokemon.sort((a, b) => a.speciesId !== b.speciesId ? a.speciesId - b.speciesId : a.name.localeCompare(b.name));
             } else {
                 try {
@@ -682,23 +728,32 @@
         }
 
         // --- Persistence (Firestore) ---
-        async function saveCollectionToFirestore() {
+        async function saveUserDataToFirestore() {
             if (!userId) return;
             try {
-                await setDoc(doc(db, POKEMON_COLLECTION, userId), { collection: Array.from(collection) });
+                const docRef = doc(db, USER_DATA_DOC, userId);
+                await setDoc(docRef, { 
+                    collection: Array.from(collection),
+                    party: currentParty
+                }, { merge: true });
             } catch (error) {
-                console.error("Error saving collection to Firestore:", error);
+                console.error("Error saving user data to Firestore:", error);
                 showToast('Could not save progress.', false);
             }
         }
 
-        async function loadCollectionFromFirestore() {
+        async function loadUserDataFromFirestore() {
             if (!userId) return;
             try {
-                const docSnap = await getDoc(doc(db, POKEMON_COLLECTION, userId));
-                if (docSnap.exists()) collection = new Set(docSnap.data().collection);
+                const docRef = doc(db, USER_DATA_DOC, userId);
+                const docSnap = await getDoc(docRef);
+                if (docSnap.exists()) {
+                    const data = docSnap.data();
+                    if (data.collection) collection = new Set(data.collection);
+                    if (data.party) currentParty = data.party;
+                }
             } catch (error) {
-                console.error("Error loading collection from Firestore:", error);
+                console.error("Error loading user data from Firestore:", error);
             }
         }
 
@@ -719,6 +774,10 @@
         gameFilter.addEventListener('change', handleGameFilterChange);
         modal.addEventListener('click', (e) => { if (e.target === modal) closeModal(); });
         document.addEventListener('keydown', (e) => { if (e.key === "Escape" && !modal.classList.contains('hidden')) closeModal(); });
+        partyHeader.addEventListener('click', () => {
+            partyGrid.classList.toggle('hidden');
+            partyArrow.classList.toggle('rotate-180');
+        });
 
         // --- App Initialization ---
         initializeFirebase(); // Runs in the background to set up persistence
