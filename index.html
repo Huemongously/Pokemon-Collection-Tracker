@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pokémon Collection Tracker</title>
+    <!-- Add to Home Screen / PWA Manifest -->
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#facc15">
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        /* Simple scrollbar styling for a cleaner look */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #1f2937; /* gray-800 */
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #4b5563; /* gray-600 */
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #6b7280; /* gray-500 */
+        }
+        /* Custom class for collected Pokémon */
+        .collected {
+            border-color: #22c55e !important; /* green-500 */
+            background-color: rgba(34, 197, 94, 0.1);
+        }
+        .collected-dot {
+            opacity: 1 !important;
+        }
+        /* Modal transition */
+        #pokedex-modal.hidden {
+            display: none;
+        }
+        .stat-bar-fill {
+            transition: width 0.5s ease-in-out;
+        }
+        /* Animation for loading dots */
+        @keyframes bounce {
+            0%, 80%, 100% { transform: scale(0); }
+            40% { transform: scale(1.0); }
+        }
+        .loading-dot {
+            animation: bounce 1.4s infinite ease-in-out both;
+        }
+        .loading-dot:nth-child(1) { animation-delay: -0.32s; }
+        .loading-dot:nth-child(2) { animation-delay: -0.16s; }
+
+        /* Moves list scrollbar */
+        #moves-list::-webkit-scrollbar-track {
+            background: #374151; /* gray-700 */
+        }
+        #moves-list::-webkit-scrollbar-thumb {
+            background: #6b7280; /* gray-500 */
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-white">
+
+    <div id="app" class="max-w-7xl mx-auto p-4 sm:p-6 lg:p-8">
+        <!-- Header -->
+        <header class="mb-8 text-center">
+            <h1 class="text-4xl sm:text-5xl font-bold text-yellow-400 tracking-tight">Pokémon Collection Tracker</h1>
+            <p class="text-gray-400 mt-2">Now with Regional Forms! Your progress is saved automatically.</p>
+        </header>
+
+        <!-- Search and Stats Bar -->
+        <div class="sticky top-0 z-10 bg-gray-900/80 backdrop-blur-sm py-4 mb-6">
+            <div class="flex flex-col md:flex-row gap-4 items-center">
+                <input type="text" id="search-input" placeholder="Search by name or Pokédex number..."
+                    class="w-full md:w-1/2 bg-gray-800 border border-gray-700 text-white rounded-lg px-4 py-2 focus:ring-2 focus:ring-yellow-500 focus:outline-none transition">
+                <select id="game-filter" class="w-full md:w-1/2 bg-gray-800 border border-gray-700 text-white rounded-lg px-4 py-2 focus:ring-2 focus:ring-yellow-500 focus:outline-none transition">
+                    <option value="all">All Pokémon Forms (National Pokédex)</option>
+                    <!-- Game options will be injected here -->
+                </select>
+                <div id="stats" class="text-lg font-semibold text-gray-300 whitespace-nowrap">
+                    Collected: <span id="collected-count" class="text-green-400 font-bold">0</span> / <span id="total-count" class="text-yellow-400 font-bold">...</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Pokémon Grid -->
+        <div id="loader" class="flex flex-col justify-center items-center h-64">
+             <div class="animate-spin rounded-full h-16 w-16 border-t-4 border-b-4 border-yellow-400"></div>
+             <p id="loader-text" class="mt-4 text-yellow-400">Fetching Pokémon data...</p>
+        </div>
+        <div id="pokemon-grid" class="hidden grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 xl:grid-cols-10 gap-3">
+            <!-- Pokémon cards will be injected here by JavaScript -->
+        </div>
+
+        <!-- Toast Notification -->
+        <div id="toast" class="fixed bottom-5 right-5 bg-gray-800 border border-gray-700 text-white px-6 py-3 rounded-lg shadow-lg transform translate-y-20 opacity-0 transition-all duration-300 z-50">
+            <p id="toast-message"></p>
+        </div>
+    </div>
+
+    <!-- Pokédex Modal -->
+    <div id="pokedex-modal" class="hidden fixed inset-0 bg-black bg-opacity-70 z-40 flex items-center justify-center p-4 transition-opacity duration-300" role="dialog" aria-modal="true">
+        <div id="modal-content" class="bg-gray-800 rounded-xl shadow-lg w-full max-w-lg transform scale-95 transition-transform duration-300 max-h-[90vh] overflow-y-auto">
+            <!-- Modal content will be injected here -->
+        </div>
+    </div>
+
+
+    <script type="module">
+        // --- Firebase SDK Imports ---
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, getDoc, setDoc, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // --- PWA Service Worker Registration ---
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('/sw.js').then(registration => {
+                    console.log('ServiceWorker registration successful with scope: ', registration.scope);
+                }, err => {
+                    console.log('ServiceWorker registration failed: ', err);
+                });
+            });
+        }
+
+        // --- DOM Elements ---
+        const grid = document.getElementById('pokemon-grid');
+        const searchInput = document.getElementById('search-input');
+        const gameFilter = document.getElementById('game-filter');
+        const loader = document.getElementById('loader');
+        const loaderText = document.getElementById('loader-text');
+        const collectedCountEl = document.getElementById('collected-count');
+        const totalCountEl = document.getElementById('total-count');
+        const toast = document.getElementById('toast');
+        const toastMessage = document.getElementById('toast-message');
+        const modal = document.getElementById('pokedex-modal');
+        const modalContent = document.getElementById('modal-content');
+
+        // --- App State ---
+        let allPokemon = [];
+        let currentlyDisplayedPokemon = [];
+        let collection = new Set();
+        let toastTimeout;
+        const pokemonDetailsCache = {};
+        const gamePokemonCache = {}; // Cache for game filter results
+
+        // --- Firebase State ---
+        let app, db, auth, userId;
+        const POKEMON_COLLECTION = 'pokemonCollection';
+
+        // --- Type Colors ---
+        const typeColors = {
+            normal: 'bg-gray-400', fire: 'bg-red-500', water: 'bg-blue-500', electric: 'bg-yellow-400', grass: 'bg-green-500', ice: 'bg-cyan-300 text-gray-800', fighting: 'bg-orange-700', poison: 'bg-purple-600', ground: 'bg-yellow-600', flying: 'bg-indigo-400', psychic: 'bg-pink-500', bug: 'bg-lime-500', rock: 'bg-stone-500', ghost: 'bg-indigo-800', dragon: 'bg-violet-700', dark: 'bg-gray-700', steel: 'bg-slate-500', fairy: 'bg-pink-300 text-gray-800'
+        };
+
+        // --- Firebase Configuration & Initialization ---
+        async function initializeFirebase() {
+            try {
+                const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+                const firebaseConfigStr = typeof __firebase_config !== 'undefined' ? __firebase_config : '{}';
+                
+                if (firebaseConfigStr === '{}') throw new Error("Firebase config is missing.");
+                
+                const firebaseConfig = JSON.parse(firebaseConfigStr);
+
+                app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+                // setLogLevel('debug');
+
+                onAuthStateChanged(auth, async (user) => {
+                    if (user) {
+                        userId = user.uid;
+                        await loadCollectionFromFirestore();
+                        await Promise.all([fetchPokemon(), fetchGameFilters()]);
+                    } else if (typeof __initial_auth_token === 'undefined') {
+                        await signInAnonymously(auth);
+                    }
+                });
+
+                if (typeof __initial_auth_token !== 'undefined' && !auth.currentUser) {
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                }
+
+            } catch (error) {
+                console.error("Firebase Initialization Error:", error);
+                loader.innerHTML = `<div class="text-center text-red-400"><h3 class="text-xl font-bold">Application Error</h3><p>Failed to initialize. Please refresh the page.</p></div>`;
+            }
+        }
+
+        // --- Data Fetching ---
+        async function fetchPokemon() {
+            try {
+                const speciesResponse = await fetch('https://pokeapi.co/api/v2/pokemon-species?limit=1025');
+                const speciesData = await speciesResponse.json();
+                
+                loaderText.textContent = 'Fetching all Pokémon forms... this may take a moment.';
+                
+                const speciesDetailsPromises = speciesData.results.map(s => fetch(s.url).then(res => res.json()));
+                const speciesDetails = await Promise.all(speciesDetailsPromises);
+
+                const pokemonList = [];
+                for (const species of speciesDetails) {
+                    for (const variety of species.varieties) {
+                        const name = variety.pokemon.name;
+                        if (name.includes('-gmax') || name.includes('-totem') || name.includes('starter') || name.includes('partner')) continue;
+                        
+                        const pokemonUrlParts = variety.pokemon.url.split('/');
+                        const pokemonId = parseInt(pokemonUrlParts[pokemonUrlParts.length - 2]);
+                        
+                        pokemonList.push({
+                            id: `${species.id}-${name}`,
+                            speciesId: species.id,
+                            name: name,
+                            imageUrl: `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/${pokemonId}.png`
+                        });
+                    }
+                }
+                
+                allPokemon = pokemonList;
+                // Sort initially by national dex number (speciesId), then by name for forms
+                allPokemon.sort((a, b) => a.speciesId !== b.speciesId ? a.speciesId - b.speciesId : a.name.localeCompare(b.name));
+                currentlyDisplayedPokemon = allPokemon;
+                renderPokemon(currentlyDisplayedPokemon);
+
+            } catch (error) {
+                console.error('Failed to fetch Pokémon data:', error);
+                loader.innerHTML = '<p class="text-red-400">Could not load Pokémon data. Please check your connection and refresh.</p>';
+            } finally {
+                loader.style.display = 'none';
+                grid.classList.remove('hidden');
+            }
+        }
+
+        async function fetchGameFilters() {
+            try {
+                const response = await fetch('https://pokeapi.co/api/v2/version-group?limit=40');
+                const data = await response.json();
+                const versionGroupDetails = await Promise.all(data.results.map(vg => fetch(vg.url).then(res => res.json())));
+
+                const internationalVersionGroups = (await Promise.all(versionGroupDetails.map(async (vg) => {
+                    if (!vg.versions || vg.versions.length === 0) return null;
+                    const versionData = await fetch(vg.versions[0].url).then(res => res.json());
+                    return versionData.names.some(name => name.language.name === 'en') ? vg : null;
+                }))).filter(Boolean);
+                
+                const dlcGroups = { 'sword-shield': ['the-isle-of-armor', 'the-crown-tundra'], 'scarlet-violet': ['the-teal-mask', 'the-indigo-disk'] };
+                const processedGroups = new Set();
+
+                internationalVersionGroups.forEach(vg => {
+                    if (processedGroups.has(vg.name)) return;
+                    if (Object.values(dlcGroups).flat().includes(vg.name)) return;
+                    addOption(vg.name, formatGameName(vg.name));
+                    processedGroups.add(vg.name);
+                    if (dlcGroups[vg.name]) {
+                        const relatedDlcs = internationalVersionGroups.filter(ivg => dlcGroups[vg.name].includes(ivg.name));
+                        relatedDlcs.forEach(dlc => {
+                            addOption(dlc.name, `↳ ${formatGameName(dlc.name)}`);
+                            processedGroups.add(dlc.name);
+                        });
+                        if (relatedDlcs.length > 0) {
+                            const allGroupNames = [vg.name, ...relatedDlcs.map(d => d.name)].join(',');
+                            addOption(allGroupNames, `${formatGameName(vg.name)} (Complete Edition)`);
+                        }
+                    }
+                });
+            } catch (error) {
+                console.error('Failed to fetch and process game list:', error);
+            }
+        }
+        
+        async function fetchPokemonEntriesForVersionGroup(groupName) {
+            if (gamePokemonCache[groupName]) return gamePokemonCache[groupName];
+            const response = await fetch(`https://pokeapi.co/api/v2/version-group/${groupName}`);
+            const data = await response.json();
+            const pokedexUrl = (data.pokedexes.find(p => !p.name.includes("updated")) || data.pokedexes[0])?.url;
+            if(!pokedexUrl) throw new Error(`No Pokedex found for ${groupName}`);
+
+            const pokedexData = await fetch(pokedexUrl).then(res => res.json());
+            const orderedEntries = pokedexData.pokemon_entries.map(entry => ({
+                pokedexNumber: entry.entry_number,
+                speciesId: parseInt(entry.pokemon_species.url.split('/').slice(-2, -1)[0])
+            })).sort((a, b) => a.pokedexNumber - b.pokedexNumber);
+            
+            gamePokemonCache[groupName] = orderedEntries;
+            return orderedEntries;
+        }
+
+        async function fetchPokemonDetails(pokemonName) {
+            if (pokemonDetailsCache[pokemonName]) return pokemonDetailsCache[pokemonName];
+            try {
+                const pokemonRes = await fetch(`https://pokeapi.co/api/v2/pokemon/${pokemonName}`);
+                if (!pokemonRes.ok) throw new Error('Pokemon data not found');
+                const data = await pokemonRes.json();
+                const speciesRes = await fetch(data.species.url);
+                const speciesData = await speciesRes.json();
+                const flavorTextEntry = speciesData.flavor_text_entries.find(entry => entry.language.name === 'en');
+                const flavorText = flavorTextEntry ? flavorTextEntry.flavor_text.replace(/[\n\f]/g, ' ') : 'No description available.';
+                const details = {
+                    id: `${speciesData.id}-${data.name}`, speciesId: speciesData.id, name: data.name,
+                    imageUrl: data.sprites.other['official-artwork'].front_default || data.sprites.front_default,
+                    types: data.types.map(t => t.type.name), height: data.height / 10, weight: data.weight / 10,
+                    abilities: data.abilities.map(a => a.ability.name.replace(/-/g, ' ')),
+                    stats: data.stats.map(s => ({ name: s.stat.name, value: s.base_stat })),
+                    moves: data.moves.map(m => m.move.name.replace(/-/g, ' ')).filter((v, i, a) => a.indexOf(v) === i).sort(),
+                    flavorText
+                };
+                pokemonDetailsCache[pokemonName] = details;
+                return details;
+            } catch (error) {
+                console.error(`Failed to fetch details for Pokémon ${pokemonName}:`, error);
+                return null;
+            }
+        }
+        
+        async function getAIStrategyGuide(details) {
+            if (pokemonDetailsCache[details.name]?.strategyGuide) return pokemonDetailsCache[details.name].strategyGuide;
+            const apiKey = "";
+            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${apiKey}`;
+            const statsString = details.stats.map(s => `${s.name}: ${s.value}`).join(', ');
+            const prompt = `Given the following Pokémon data, provide a detailed strategy guide in a minified JSON format. The JSON object must have these exact keys: "nature", "heldItem", "evDistribution", "strategy", and "moveset". - "nature" must be a string. - "heldItem" must be a string. - "evDistribution" must be an object with two string keys: "spread" (e.g., "252 SpA / 4 SpD / 252 Spe") and "ivs" (e.g., "0 Atk IVs, max all others"). - "strategy" must be a concise paragraph (2-3 sentences). - "moveset" must be an array of exactly 4 objects, where each object has a "name" (string) and "reason" (string). Pokémon: ${formatPokemonName(details.name)}, Types: ${details.types.join('/')}, Abilities: ${details.abilities.map(capitalize).join('/')}, Base Stats: ${statsString}.`;
+            try {
+                const response = await fetch(apiUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }) });
+                if (!response.ok) throw new Error(`API request failed with status ${response.status}`);
+                const result = await response.json();
+                const text = result.candidates?.[0]?.content?.parts?.[0]?.text;
+                if (!text) throw new Error("No content in API response.");
+                const cleanedText = text.replace(/^```json\s*|```\s*$/g, '').trim();
+                const strategyGuide = JSON.parse(cleanedText);
+                pokemonDetailsCache[details.name].strategyGuide = strategyGuide;
+                return strategyGuide;
+            } catch (error) {
+                console.error("AI Strategy Guide Error:", error);
+                return { error: "Could not generate a strategy guide at this time." };
+            }
+        }
+
+        // --- Rendering & UI ---
+        function renderPokemon(pokemonList, orderMap = null) {
+            grid.innerHTML = '';
+            if (pokemonList.length === 0) {
+                grid.innerHTML = `<p class="col-span-full text-center text-gray-400">No Pokémon found matching your criteria.</p>`;
+            } else {
+                pokemonList.forEach(pokemon => {
+                    const isCollected = collection.has(pokemon.id);
+                    const card = document.createElement('div');
+                    card.id = `poke-${pokemon.id}`;
+                    // Reduced padding from p-3 to p-2.5 (using p-2 for simplicity in Tailwind)
+                    card.className = `pokemon-card bg-gray-800 border-2 border-gray-700 rounded-lg p-2 text-center cursor-pointer transition-all duration-300 hover:border-yellow-400 hover:scale-105 ${isCollected ? 'collected' : ''}`;
+                    
+                    const regionalNumber = orderMap ? orderMap.get(pokemon.speciesId) : null;
+                    const pokedexNumberDisplay = regionalNumber 
+                        ? `#${String(regionalNumber).padStart(4, '0')} <span class
