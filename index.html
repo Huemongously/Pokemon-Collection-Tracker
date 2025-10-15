@@ -142,8 +142,8 @@
         const modalContent = document.getElementById('modal-content');
 
         // --- App State ---
-        let allPokemon = [];
-        let currentlyDisplayedPokemon = [];
+        let allPokemon = []; // The complete, final list (including all forms)
+        let currentlyDisplayedPokemon = []; // The list currently visible in the grid
         let collection = new Set();
         let toastTimeout;
         const pokemonDetailsCache = {};
@@ -164,10 +164,10 @@
             return new Promise(resolve => setTimeout(resolve, ms));
         }
 
-        async function fetchWithRetry(url, retries = 3) {
+        async function fetchWithRetry(url, retries = 3, options = {}) {
             for (let i = 0; i < retries; i++) {
                 try {
-                    const response = await fetch(url);
+                    const response = await fetch(url, options);
                     if (!response.ok) {
                         if (i === retries - 1) throw new Error(`Final attempt failed with status: ${response.status}`);
                         throw new Error(`Attempt ${i + 1} failed with status: ${response.status}`);
@@ -213,14 +213,15 @@
                 }
 
             } catch (error) {
-                // Silent failure: Logs warning but doesn't affect the UI/loading sequence.
                 console.warn("Persistence Disabled: Firebase configuration error detected. Collection saving is unavailable.", error);
                 isPersistenceEnabled = false;
             }
         }
 
+        // --- Core Application Logic ---
+
         async function startDataLoading() {
-            // DEFENSIVE RESET: Explicitly ensure the loading spinner is present.
+            // 1. Guaranteed Loader Display
             loader.style.display = 'flex';
             loader.innerHTML = `
                 <div class="animate-spin rounded-full h-16 w-16 border-t-4 border-b-4 border-yellow-400"></div>
@@ -228,24 +229,59 @@
             `;
             grid.classList.add('hidden');
 
+            // 2. Fast Initial Load (Gen 1)
             try {
-                await Promise.all([fetchPokemon(), fetchGameFilters()]);
+                const initialPokemon = await fetchInitialPokemonList();
+                allPokemon = initialPokemon;
+                currentlyDisplayedPokemon = allPokemon;
+                renderPokemon(currentlyDisplayedPokemon); // Render fast Gen 1 list
+                loader.style.display = 'none';
+                grid.classList.remove('hidden');
+
+                // 3. Asynchronous Full Load and Filter Fetch
+                // This runs in the background and updates the grid later
+                const [fullPokemonList] = await Promise.all([
+                    fetchFullPokemonData(),
+                    fetchGameFilters()
+                ]);
+                
+                // Update state with the full, comprehensive list
+                allPokemon = fullPokemonList;
+                allPokemon.sort((a, b) => a.speciesId !== b.speciesId ? a.speciesId - b.speciesId : a.name.localeCompare(b.name));
+                currentlyDisplayedPokemon = allPokemon;
+                
+                // Re-render the grid to show all forms and update total count
+                renderPokemon(currentlyDisplayedPokemon); 
+
             } catch (error) {
                 console.error("CRITICAL: Failed to load core application data.", error);
-                // If core data fails, show a final, informative error message.
-                loader.innerHTML = `<div class="text-center text-red-400"><h3 class="text-xl font-bold">Network Error</h3><p>Could not load Pokémon data. Check your network connection and refresh.</p><p class="text-xs text-gray-500 mt-2">${error.message.substring(0, 100)}...</p></div>`;
-            } finally {
-                // Ensure UI cleans up after itself
-                if (allPokemon.length > 0) {
-                    loader.style.display = 'none';
-                    grid.classList.remove('hidden');
-                }
+                // If anything fails (even the fast load), show a single error message
+                loader.style.display = 'flex';
+                loader.innerHTML = `<div class="text-center text-red-400"><h3 class="text-xl font-bold">Network Error</h3><p>Could not load Pokémon data. Check your network connection and refresh.</p></div>`;
+                grid.classList.add('hidden'); // Hide potentially partial grid
             }
         }
 
-        // --- Data Fetching (Updated to use fetchWithRetry) ---
+        // --- Data Fetching (Updated to use fetchWithRetry and split logic) ---
         
-        async function fetchPokemon() {
+        async function fetchInitialPokemonList() {
+             try {
+                const response = await fetchWithRetry('https://pokeapi.co/api/v2/pokemon?limit=151', 3);
+                const data = await response.json();
+                
+                // Only return basic data for the first 151
+                return data.results.map((p, index) => ({
+                    id: `${index + 1}-${p.name}`, 
+                    speciesId: index + 1,
+                    name: p.name,
+                    imageUrl: `https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/${index + 1}.png`
+                }));
+            } catch(error) {
+                throw new Error(`Failed to load initial Gen 1 data: ${error.message}`);
+            }
+        }
+
+        async function fetchFullPokemonData() {
             try {
                 const speciesResponse = await fetchWithRetry('https://pokeapi.co/api/v2/pokemon-species?limit=1025', 3);
                 const speciesData = await speciesResponse.json();
@@ -271,13 +307,10 @@
                     }
                 }
                 
-                allPokemon = pokemonList;
-                allPokemon.sort((a, b) => a.speciesId !== b.speciesId ? a.speciesId - b.speciesId : a.name.localeCompare(b.name));
-                currentlyDisplayedPokemon = allPokemon;
-                renderPokemon(currentlyDisplayedPokemon);
+                return pokemonList;
 
             } catch (error) {
-                throw new Error(`Failed to load Pokémon data: ${error.message}`);
+                throw new Error(`Failed to fetch full Pokémon list and forms: ${error.message}`);
             }
         }
 
@@ -351,20 +384,4 @@
                     types: data.types.map(t => t.type.name), height: data.height / 10, weight: data.weight / 10,
                     abilities: data.abilities.map(a => a.ability.name.replace(/-/g, ' ')),
                     stats: data.stats.map(s => ({ name: s.stat.name, value: s.base_stat })),
-                    moves: data.moves.map(m => m.move.name.replace(/-/g, ' ')).filter((v, i, a) => a.indexOf(v) === i).sort(),
-                    flavorText
-                };
-                pokemonDetailsCache[pokemonName] = details;
-                return details;
-            } catch (error) {
-                console.error(`Failed to fetch details for Pokémon ${pokemonName}:`, error);
-                return null;
-            }
-        }
-        
-        async function getAIStrategyGuide(details) {
-            if (pokemonDetailsCache[details.name]?.strategyGuide) return pokemonDetailsCache[details.name].strategyGuide;
-            const apiKey = "";
-            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${apiKey}`;
-            const statsString = details.stats.map(s => `${s.name}: ${s.value}`).join(', ');
-            const prompt = `Given the following Pokémon data, provide a detailed strategy guide in a minified JSON format. The JSON object must have these exact keys: "nature", "heldItem", "evDistribution", "strategy", and "moveset". - "nature" must be a string. - "heldItem" must be a string. - "evDistribution" must be an object with two string keys: "spread" (e.g., "252 SpA / 4 SpD / 252 Spe") and "ivs" (e.g., "0 Atk IVs, max all others"). - "strategy" must be a concise paragraph (2-3 sentences). - "moveset" must be an array of exactly 4 objects, where each object has a "name" (string) and "reason" (string). Pokémon: ${formatPokemonName(details.name)}, Types: ${details.type
+                    moves: data.moves.map(m => m.move.name.replace(/-/g, ' ')).filt
