@@ -99,7 +99,7 @@
                      <h2 class="text-xl font-bold text-yellow-400">My Competitive Party</h2>
                      <svg id="party-arrow" class="w-6 h-6 text-gray-400 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
                 </div>
-                <div id="party-grid" class="hidden grid grid-cols-3 sm:grid-cols-6 gap-2 md:gap-4 mt-2">
+                <div id="party-grid" class="hidden grid-cols-3 sm:grid-cols-6 gap-2 md:gap-4 mt-2">
                     <!-- Party slots will be injected here -->
                 </div>
             </div>
@@ -199,6 +199,59 @@
                     else throw new Error(`Failed to fetch ${url} after ${retries} attempts.`);
                 }
             }
+        }
+
+        function generateStatBasedStrategy(details) {
+            const stats = {};
+            details.stats.forEach(s => { stats[s.name.replace('-', '')] = s.value; });
+
+            let role, nature, evSpread, strategy, item;
+            const isPhysical = stats.attack > stats.specialattack;
+            const isFast = stats.speed >= 100;
+            const isBulky = stats.hp > 90 || stats.defense > 90 || stats.specialdefense > 90;
+
+            if (isFast && (stats.attack > 90 || stats.specialattack > 90)) {
+                role = isPhysical ? "Fast Physical Sweeper" : "Fast Special Sweeper";
+                nature = isPhysical ? "Jolly" : "Timid";
+                evSpread = `4 HP / ${isPhysical ? '252 Atk' : '252 SpA'} / 252 Spe`;
+                item = "Life Orb or Choice Scarf";
+                strategy = `This build maximizes ${details.name}'s high Speed and ${isPhysical ? 'Attack' : 'Special Attack'} to outspeed and eliminate threats. It functions best as a late-game cleaner or revenge killer.`;
+            } else if (isBulky && !isFast) {
+                const isPhysicallyBulky = stats.defense > stats.specialdefense;
+                role = isPhysicallyBulky ? "Physical Wall" : "Special Wall";
+                nature = isPhysicallyBulky ? "Bold" : "Calm";
+                evSpread = `252 HP / ${isPhysicallyBulky ? '252 Def' : '252 SpD'} / 4 SpA`;
+                item = "Leftovers or Heavy-Duty Boots";
+                strategy = `This build leverages ${details.name}'s natural bulk to absorb hits. It aims to wear down opponents with status moves and pivot out to teammates.`;
+            } else {
+                role = isPhysical ? "Bulky Physical Attacker" : "Bulky Special Attacker";
+                nature = isPhysical ? "Adamant" : "Modest";
+                evSpread = `252 HP / ${isPhysical ? '252 Atk' : '252 SpA'} / 4 Def`;
+                item = "Assault Vest or Life Orb";
+                strategy = `A balanced build that combines decent offensive pressure with significant bulk, allowing ${details.name} to both take hits and deal considerable damage in return.`;
+            }
+            
+            const allMoves = details.moves;
+            const stabMoves = [], coverageMoves = [], utilityMoves = [];
+            const goodCoverage = ['ice beam', 'thunderbolt', 'flamethrower', 'earthquake', 'focus blast', 'dark pulse', 'play rough'];
+            const goodUtility = ['stealth rock', 'spikes', 'toxic spikes', 'roost', 'recover', 'will o wisp', 'thunder wave', 'swords dance', 'nasty plot', 'calm mind', 'rapid spin'];
+
+            allMoves.forEach(move => {
+                if (goodUtility.includes(move)) utilityMoves.push({name: move, reason: "High-value utility/setup move."});
+                else if (goodCoverage.includes(move)) coverageMoves.push({name: move, reason: "Excellent coverage against common types."});
+                else if (Math.random() > 0.5) stabMoves.push({name: move, reason: "Primary STAB attack for consistent damage."});
+            });
+
+            let moveset = [ ...utilityMoves.slice(0,1), ...coverageMoves.slice(0,1), ...stabMoves.slice(0,2) ].slice(0,4);
+            if (moveset.length < 4) {
+                moveset = moveset.concat(allMoves.slice(0, 4 - moveset.length).map(m => ({name: m, reason: "General purpose attack."})));
+            }
+
+            return {
+                nature, heldItem: item, evDistribution: { spread: evSpread, ivs: `Max IVs in primary stats. ${isPhysical ? (stats.specialattack < 60 ? "0 SpA IVs." : "") : (stats.attack < 60 ? "0 Atk IVs." : "")}`},
+                strategy: `${strategy} This is an auto-generated set based on base stats.`,
+                moveset
+            };
         }
 
         // --- Initialization and App Start ---
@@ -390,11 +443,8 @@
         }
         
         async function getAIStrategyGuide(details) {
-            if (!isPersistenceEnabled) {
-                // This is the signal for the UI to show the form directly.
-                return { error: "FORM_FALLBACK" };
-            }
             if (pokemonDetailsCache[details.name]?.strategyGuide) return pokemonDetailsCache[details.name].strategyGuide;
+            if (!isPersistenceEnabled) return { error: "FORM_FALLBACK" };
             
             const apiKey = "";
             const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${apiKey}`;
@@ -452,7 +502,7 @@
                 const pokemon = currentParty[i];
                 const slot = document.createElement('div');
                 if (pokemon) {
-                    slot.className = 'party-slot-occupied relative bg-gray-800 border-2 border-gray-700 rounded-lg p-2 text-center cursor-pointer transition-all duration-300 hover:border-red-500';
+                    slot.className = 'party-slot-occupied relative bg-gray-800 border-2 border-gray-700 rounded-lg p-2 text-center cursor-pointer transition-all duration-300 hover:border-red-500 h-28 flex flex-col justify-center';
                     slot.innerHTML = `
                         <img src="${pokemon.imageUrl}" alt="${formatPokemonName(pokemon.name)}" class="w-16 h-16 mx-auto" loading="lazy">
                         <p class="text-xs truncate font-semibold mt-1">${formatPokemonName(pokemon.name)}</p>
@@ -488,30 +538,34 @@
             const statsHtml = details.stats.map(stat => `<div class="flex items-center"><span class="w-1/3 text-sm font-semibold capitalize text-gray-400">${stat.name.replace('special-', 'Sp. ')}</span><div class="w-2/3 bg-gray-600 rounded-full h-4"><div class="stat-bar-fill h-4 rounded-full bg-yellow-400 text-right pr-2 text-xs font-bold text-gray-900" style="width: 0%;" data-width="${(stat.value / 255) * 100}%">${stat.value}</div></div></div>`).join('');
 
             modalContent.innerHTML = `
-                <div class="p-6 relative">
-                    <button id="close-modal" class="absolute top-4 right-4 text-gray-400 hover:text-white transition text-3xl leading-none">&times;</button>
-                    <div class="text-center">
-                        <img src="${details.imageUrl}" alt="${formatPokemonName(details.name)}" class="w-40 h-40 mx-auto -mt-16 mb-2 rounded-full bg-gray-700/50 shadow-lg" onerror="this.onerror=null;this.src='https://placehold.co/160x160/4b5563/ffffff?text=?';">
-                        <h2 class="text-3xl font-bold">${formatPokemonName(details.name)} <span class="text-gray-400 text-2xl font-normal">#${String(details.speciesId).padStart(4, '0')}</span></h2>
-                        <div class="flex justify-center gap-2 my-3">${typesHtml}</div>
+                <div class="relative">
+                    <div class="bg-gray-700/50 pt-8 pb-4 min-h-[140px] flex justify-center items-end rounded-t-xl">
+                         <img src="${details.imageUrl}" alt="${formatPokemonName(details.name)}" class="w-32 h-32 sm:w-40 sm:h-40" onerror="this.onerror=null;this.src='https://placehold.co/160x160/4b5563/ffffff?text=?';">
                     </div>
-                    <div class="space-y-4 mt-4 text-sm">
-                        <p class="text-center text-gray-300 italic">${details.flavorText}</p>
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-center">
-                            <div><strong class="text-gray-400">Height:</strong> ${details.height} m</div>
-                            <div><strong class="text-gray-400">Weight:</strong> ${details.weight} kg</div>
+                    <div class="p-4 sm:p-6">
+                        <button id="close-modal" class="absolute top-4 right-4 text-gray-400 hover:text-white transition text-3xl leading-none z-10">&times;</button>
+                        <div class="text-center -mt-4">
+                            <h2 class="text-2xl sm:text-3xl font-bold">${formatPokemonName(details.name)} <span class="text-gray-400 text-xl sm:text-2xl font-normal">#${String(details.speciesId).padStart(4, '0')}</span></h2>
+                            <div class="flex justify-center gap-2 my-3">${typesHtml}</div>
                         </div>
-                        <div><h3 class="font-bold text-lg mb-2 border-b border-gray-700 pb-1">Abilities</h3><ul class="list-disc list-inside text-gray-300">${abilitiesHtml}</ul></div>
-                        <div><h3 class="font-bold text-lg mb-2 border-b border-gray-700 pb-1">Base Stats</h3><div class="space-y-2">${statsHtml}</div></div>
-                        <div id="moves-section">
-                            <h3 class="font-bold text-lg mb-2 border-b border-gray-700 pb-1 cursor-pointer flex justify-between items-center" id="moves-header"><span>Learnable Moves (${details.moves.length})</span><svg id="moves-arrow" class="w-4 h-4 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg></h3>
-                            <div id="moves-content" class="hidden space-y-2 pt-2"><input type="text" id="move-search-input" placeholder="Search moves..." class="w-full bg-gray-700 border border-gray-600 text-white rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-yellow-500 focus:outline-none transition"><div id="moves-list" class="max-h-48 overflow-y-auto pr-2 flex flex-wrap gap-2"></div></div>
+                        <div class="space-y-4 mt-4 text-sm">
+                            <p class="text-center text-gray-300 italic">${details.flavorText}</p>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-center">
+                                <div><strong class="text-gray-400">Height:</strong> ${details.height} m</div>
+                                <div><strong class="text-gray-400">Weight:</strong> ${details.weight} kg</div>
+                            </div>
+                            <div><h3 class="font-bold text-lg mb-2 border-b border-gray-700 pb-1">Abilities</h3><ul class="list-disc list-inside text-gray-300">${abilitiesHtml}</ul></div>
+                            <div><h3 class="font-bold text-lg mb-2 border-b border-gray-700 pb-1">Base Stats</h3><div class="space-y-2">${statsHtml}</div></div>
+                            <div id="moves-section">
+                                <h3 class="font-bold text-lg mb-2 border-b border-gray-700 pb-1 cursor-pointer flex justify-between items-center" id="moves-header"><span>Learnable Moves (${details.moves.length})</span><svg id="moves-arrow" class="w-4 h-4 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg></h3>
+                                <div id="moves-content" class="hidden space-y-2 pt-2"><input type="text" id="move-search-input" placeholder="Search moves..." class="w-full bg-gray-700 border border-gray-600 text-white rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-yellow-500 focus:outline-none transition"><div id="moves-list" class="max-h-48 overflow-y-auto pr-2 flex flex-wrap gap-2"></div></div>
+                            </div>
+                            <div id="strategy-section-container"></div>
                         </div>
-                        <div id="strategy-section-container"></div>
-                    </div>
-                    <div class="flex gap-2 mt-6">
-                        <button id="toggle-collection-btn" class="w-1/2 py-3 font-bold rounded-lg transition ${isCollected ? 'bg-red-600 hover:bg-red-700' : 'bg-green-600 hover:bg-green-700'}">${isCollected ? 'Remove from Collection' : 'Add to Collection'}</button>
-                        <button id="toggle-party-btn" class="w-1/2 py-3 font-bold rounded-lg transition"></button>
+                        <div class="flex gap-2 mt-6">
+                            <button id="toggle-collection-btn" class="w-1/2 py-3 font-bold rounded-lg transition ${isCollected ? 'bg-red-600 hover:bg-red-700' : 'bg-green-600 hover:bg-green-700'}">${isCollected ? 'Remove from Collection' : 'Add to Collection'}</button>
+                            <button id="toggle-party-btn" class="w-1/2 py-3 font-bold rounded-lg transition"></button>
+                        </div>
                     </div>
                 </div>`;
             
@@ -803,6 +857,7 @@
         document.addEventListener('keydown', (e) => { if (e.key === "Escape" && !modal.classList.contains('hidden')) closeModal(); });
         partyHeader.addEventListener('click', () => {
             partyGrid.classList.toggle('hidden');
+            partyGrid.classList.toggle('grid'); // Ensure grid is added back
             partyArrow.classList.toggle('rotate-180');
         });
 
