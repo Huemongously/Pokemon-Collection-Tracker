@@ -234,7 +234,7 @@
                 const initialPokemon = await fetchInitialPokemonList();
                 allPokemon = initialPokemon; // Temporarily use Gen 1 data as the 'allPokemon' list
                 currentlyDisplayedPokemon = allPokemon;
-                renderPokemon(currentlyDisplayedPokemon); 
+                renderPokemon(currentlyDisplayedPokemon); // Render fast Gen 1 list
                 loader.style.display = 'none';
                 grid.classList.remove('hidden');
                 
@@ -272,11 +272,11 @@
             } catch (error) {
                 // Background failure: Log error, but DO NOT interrupt the already loaded Kanto grid.
                 console.error("Background Load Failed: Full Pokédex/Filter data could not be loaded. Functionality may be limited.", error);
-                showToast("Warning: Full Pokédex data failed to load. Only Gen 1 visible.", false);
+                showToast("Warning: Full Pokédex data failed to load. Displaying limited dataset.", false);
             }
         }
 
-        // --- Data Fetching (Updated to use fetchWithRetry and split logic) ---
+        // --- Data Fetching ---
         
         async function fetchInitialPokemonList() {
              try {
@@ -421,26 +421,9 @@
         async function getAIStrategyGuide(details) {
             if (pokemonDetailsCache[details.name]?.strategyGuide) return pokemonDetailsCache[details.name].strategyGuide;
 
-            // FIX: If running on external host (persistence disabled), return a mock strategy immediately.
+            // FIX: If running on external host (persistence disabled), return an error message to suppress the spinner.
             if (!isPersistenceEnabled) {
-                console.warn("AI Strategy Guide: Returning mock response due to external hosting environment.");
-                const mockStrategy = {
-                    nature: "Jolly or Adamant",
-                    heldItem: "Choice Scarf or Life Orb",
-                    evDistribution: {
-                        spread: "252 Atk / 4 SpD / 252 Spe",
-                        ivs: "Max IVs in HP, Atk, Def, SpD, Spe. 0 Atk IVs if special."
-                    },
-                    strategy: "This mock strategy outlines a fast, offensive physical sweeper role. Maximize Attack and Speed to hit hard and outspeed threats. Use Choice Scarf to secure speed control or Life Orb for maximum damage output.",
-                    moveset: [
-                        { name: "Mock Move 1", reason: "A strong STAB attack to deal reliable damage." },
-                        { name: "Mock Move 2", reason: "Coverage move to hit common counter-types super effectively." },
-                        { name: "Mock Move 3", reason: "Utility move for setting up or status application." },
-                        { name: "Mock Move 4", reason: "A powerful, high-risk attack for late-game sweeps." }
-                    ]
-                };
-                pokemonDetailsCache[details.name].strategyGuide = mockStrategy;
-                return mockStrategy;
+                return { error: "AI Strategy Guide generation is disabled on public hosts due to security policy restrictions. Requires full environment access." };
             }
 
             // Original logic for Canvas environment
@@ -449,6 +432,7 @@
             const statsString = details.stats.map(s => `${s.name}: ${s.value}`).join(', ');
             const prompt = `Given the following Pokémon data, provide a detailed strategy guide in a minified JSON format. The JSON object must have these exact keys: "nature", "heldItem", "evDistribution", "strategy", and "moveset". - "nature" must be a string. - "heldItem" must be a string. - "evDistribution" must be an object with two string keys: "spread" (e.g., "252 SpA / 4 SpD / 252 Spe") and "ivs" (e.g., "0 Atk IVs, max all others"). - "strategy" must be a concise paragraph (2-3 sentences). - "moveset" must be an array of exactly 4 objects, where each object has a "name" (string) and "reason" (string). Pokémon: ${formatPokemonName(details.name)}, Types: ${details.types.join('/')}, Abilities: ${details.abilities.map(capitalize).join('/')}, Base Stats: ${statsString}.`;
             try {
+                // Reduced retries to 1 for this resource-intensive, often-blocked call
                 const response = await fetchWithRetry(apiUrl, 1, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }) });
                 if (!response.ok) throw new Error(`API request failed with status ${response.status}`);
                 const result = await response.json();
@@ -515,6 +499,24 @@
                         <div class="stat-bar-fill h-4 rounded-full bg-yellow-400 text-right pr-2 text-xs font-bold text-gray-900" style="width: 0%;" data-width="${(stat.value / 255) * 100}%">${stat.value}</div>
                     </div></div>`).join('');
 
+            // --- Conditionally Render Modal Content ---
+            let aiSectionHtml = '';
+            if (isPersistenceEnabled) {
+                aiSectionHtml = `
+                    <div id="ai-strategy-section">
+                        <h3 class="font-bold text-lg mb-2 border-b border-gray-700 pb-1">AI Strategy Guide</h3>
+                        <div id="ai-loader" class="flex items-center justify-center space-x-2 py-4">
+                            <div class="loading-dot w-3 h-3 bg-yellow-400 rounded-full"></div><div class="loading-dot w-3 h-3 bg-yellow-400 rounded-full"></div><div class="loading-dot w-3 h-3 bg-yellow-400 rounded-full"></div>
+                        </div>
+                    </div>`;
+            } else {
+                aiSectionHtml = `
+                    <div id="ai-strategy-section" class="text-center py-4">
+                        <p class="text-gray-500 text-sm italic">Competitive Strategy Guide generation is disabled on this public host due to security policy restrictions.</p>
+                    </div>`;
+            }
+
+
             modalContent.innerHTML = `
                 <div class="p-6 relative">
                     <button id="close-modal" class="absolute top-4 right-4 text-gray-400 hover:text-white transition text-3xl leading-none">&times;</button>
@@ -541,12 +543,7 @@
                                 <div id="moves-list" class="max-h-48 overflow-y-auto pr-2 flex flex-wrap gap-2"></div>
                             </div>
                         </div>
-                        <div id="ai-strategy-section">
-                            <h3 class="font-bold text-lg mb-2 border-b border-gray-700 pb-1">AI Strategy Guide</h3>
-                            <div id="ai-loader" class="flex items-center justify-center space-x-2 py-4">
-                                <div class="loading-dot w-3 h-3 bg-yellow-400 rounded-full"></div><div class="loading-dot w-3 h-3 bg-yellow-400 rounded-full"></div><div class="loading-dot w-3 h-3 bg-yellow-400 rounded-full"></div>
-                            </div>
-                        </div>
+                        ${aiSectionHtml}
                     </div>
                     <button id="toggle-collection-btn" class="w-full mt-6 py-3 font-bold rounded-lg transition ${isCollected ? 'bg-red-600 hover:bg-red-700' : 'bg-green-600 hover:bg-green-700'}">${isCollected ? 'Remove from Collection' : 'Add to Collection'}</button>
                 </div>`;
@@ -564,16 +561,19 @@
             movesHeader.addEventListener('click', () => { movesContent.classList.toggle('hidden'); movesArrow.classList.toggle('rotate-180'); });
             moveSearchInput.addEventListener('input', (e) => renderMoves(allMoves.filter(move => move.toLowerCase().includes(e.target.value.toLowerCase()))));
             
-            const strategy = await getAIStrategyGuide(details);
-            const aiSection = document.getElementById('ai-strategy-section');
-            document.getElementById('ai-loader').style.display = 'none';
-            aiSection.innerHTML += strategy.error ? `<p class="text-red-400 text-center">${strategy.error}</p>` : `<div class="text-sm space-y-2">
-                <p><strong class="text-gray-400">Recommended Nature:</strong> ${strategy.nature}</p>
-                <p><strong class="text-gray-400">Suggested Held Item:</strong> ${strategy.heldItem}</p>
-                ${strategy.evDistribution ? `<p><strong class="text-gray-400">EV Spread:</strong> ${strategy.evDistribution.spread}</p><p><strong class="text-gray-400">IV Priority:</strong> ${strategy.evDistribution.ivs}</p>` : ''}
-                <p><strong class="text-gray-400">Strategy:</strong> ${strategy.strategy}</p>
-                <h4 class="font-semibold text-base mt-2">Example Moveset:</h4>
-                <ul class="list-disc list-inside ml-2">${strategy.moveset.map(m => `<li class="mb-1"><strong class="capitalize text-yellow-400">${m.name.replace(/-/g,' ')}:</strong> <span class="text-gray-300">${m.reason}</span></li>`).join('')}</ul></div>`;
+            // Only attempt to load strategy if persistence is enabled (Canvas environment)
+            if (isPersistenceEnabled) {
+                const strategy = await getAIStrategyGuide(details);
+                const aiSection = document.getElementById('ai-strategy-section');
+                document.getElementById('ai-loader').style.display = 'none';
+                aiSection.innerHTML += strategy.error ? `<p class="text-red-400 text-center">${strategy.error}</p>` : `<div class="text-sm space-y-2">
+                    <p><strong class="text-gray-400">Recommended Nature:</strong> ${strategy.nature}</p>
+                    <p><strong class="text-gray-400">Suggested Held Item:</strong> ${strategy.heldItem}</p>
+                    ${strategy.evDistribution ? `<p><strong class="text-gray-400">EV Spread:</strong> ${strategy.evDistribution.spread}</p><p><strong class="text-gray-400">IV Priority:</strong> ${strategy.evDistribution.ivs}</p>` : ''}
+                    <p><strong class="text-gray-400">Strategy:</strong> ${strategy.strategy}</p>
+                    <h4 class="font-semibold text-base mt-2">Example Moveset:</h4>
+                    <ul class="list-disc list-inside ml-2">${strategy.moveset.map(m => `<li class="mb-1"><strong class="capitalize text-yellow-400">${m.name.replace(/-/g,' ')}:</strong> <span class="text-gray-300">${m.reason}</span></li>`).join('')}</ul></div>`;
+            }
         }
 
         function closeModal() {
