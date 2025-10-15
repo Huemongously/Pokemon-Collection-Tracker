@@ -159,6 +159,18 @@
             normal: 'bg-gray-400', fire: 'bg-red-500', water: 'bg-blue-500', electric: 'bg-yellow-400', grass: 'bg-green-500', ice: 'bg-cyan-300 text-gray-800', fighting: 'bg-orange-700', poison: 'bg-purple-600', ground: 'bg-yellow-600', flying: 'bg-indigo-400', psychic: 'bg-pink-500', bug: 'bg-lime-500', rock: 'bg-stone-500', ghost: 'bg-indigo-800', dragon: 'bg-violet-700', dark: 'bg-gray-700', steel: 'bg-slate-500', fairy: 'bg-pink-300 text-gray-800'
         };
 
+        // --- Static Smogon Data Fallback ---
+        const SMOGON_FALLBACK_DATA = {
+            // NOTE: This is a curated subset. In a real app, this could be expanded.
+            "venusaur": { nature: "Modest", heldItem: "Life Orb", evDistribution: { spread: "252 SpA / 4 SpD / 252 Spe", ivs: "Max IVs in SpA, Spe. 0 Atk IVs." }, strategy: "A powerful sun sweeper with Chlorophyll. Aims to outspeed and deal massive damage with its special attacks under harsh sunlight.", moveset: [{ name: "Growth", reason: "Boosts Attack and Special Attack, doubling in sun." }, { name: "Giga Drain", reason: "STAB move that provides recovery." }, { name: "Sludge Bomb", reason: "Strong Poison STAB for Fairy-types." }, { name: "Weather Ball", reason: "Becomes a 100 BP Fire-type move in sun, providing excellent coverage." }] },
+            "charizard": { nature: "Timid", heldItem: "Heavy-Duty Boots", evDistribution: { spread: "252 SpA / 4 SpD / 252 Spe", ivs: "Max IVs in SpA, Spe. 0 Atk IVs." }, strategy: "A special wallbreaker and sweeper that isn't afraid of entry hazards thanks to Heavy-Duty Boots. It can pivot and apply pressure throughout the game.", moveset: [{ name: "Flamethrower", reason: "Reliable and powerful Fire STAB." }, { name: "Air Slash", reason: "Secondary STAB with a chance to cause flinching." }, { name: "Focus Blast", reason: "Provides crucial coverage against Rock and Steel types." }, { name: "Roost", reason: "Increases longevity by providing reliable recovery." }] },
+            "blastoise": { nature: "Modest", heldItem: "White Herb", evDistribution: { spread: "4 Def / 252 SpA / 252 Spe", ivs: "Max IVs in SpA, Spe. 0 Atk IVs." }, strategy: "A classic Shell Smash sweeper. White Herb negates the defense drops from Shell Smash, allowing Blastoise to set up and attempt a sweep with its boosted Speed and Special Attack.", moveset: [{ name: "Shell Smash", reason: "The core of the set, massively boosting offensive stats." }, { name: "Surf", reason: "Consistent and powerful Water STAB." }, { name: "Ice Beam", reason: "Essential coverage against Dragon and Grass types." }, { name: "Dark Pulse", reason: "Hits Psychic and Ghost types super effectively." }] },
+            "pikachu": { nature: "Jolly", heldItem: "Light Ball", evDistribution: { spread: "252 Atk / 4 Def / 252 Spe", ivs: "Max all relevant stats." }, strategy: "A glass cannon that hits incredibly hard with Light Ball doubling its Attack and Special Attack. Aims to revenge kill or sweep late-game.", moveset: [{ name: "Volt Tackle", reason: "Extremely powerful STAB, though it causes recoil damage." }, { name: "Fake Out", reason: "Guaranteed flinch on the first turn." }, { name: "Knock Off", reason: "Removes items from opponents, crippling them." }, { name: "Play Rough", reason: "Coverage for Dragon types." }] },
+            "gengar": { nature: "Timid", heldItem: "Focus Sash", evDistribution: { spread: "252 SpA / 4 SpD / 252 Spe", ivs: "Max IVs in SpA, Spe. 0 Atk IVs." }, strategy: "A fast special attacker that excels at revenge killing. Focus Sash allows it to survive one hit to retaliate. Its typing provides useful immunities.", moveset: [{ name: "Shadow Ball", reason: "Primary STAB move with good neutral coverage." }, { name: "Sludge Wave", reason: "Strong Poison STAB that hits Fairy-types." }, { name: "Focus Blast", reason: "Coverage for Dark and Steel types that resist its STABs." }, { name: "Nasty Plot", reason: "Can be used on a predicted switch to set up a sweep." }] },
+            "tyranitar": { nature: "Adamant", heldItem: "Choice Band", evDistribution: { spread: "252 Atk / 4 Def / 252 Spe", ivs: "Max all relevant stats." }, strategy: "A powerful wallbreaker that uses its immense Attack stat, boosted by Choice Band, to punch holes in defensive teams. Sand Stream provides chip damage and boosts its Special Defense.", moveset: [{ name: "Stone Edge", reason: "High-power Rock STAB." }, { name: "Crunch", reason: "Reliable Dark STAB." }, { name: "Earthquake", reason: "Excellent coverage against Steel-types." }, { name: "Ice Punch", reason: "Hits Ground and Dragon types for super-effective damage." }] },
+            "gardevoir": { nature: "Timid", heldItem: "Choice Scarf", evDistribution: { spread: "252 SpA / 4 SpD / 252 Spe", ivs: "Max IVs in SpA, Spe. 0 Atk IVs." }, strategy: "A fast revenge killer and late-game cleaner with Choice Scarf. Its great Special Attack and typing allow it to threaten many common offensive threats.", moveset: [{ name: "Moonblast", reason: "Powerful and reliable Fairy STAB." }, { name: "Psyshock", reason: "Psychic STAB that targets the opponent's physical defense." }, { name: "Mystical Fire", reason: "Coverage against Steel-types that also lowers their Special Attack." }, { name: "Trick", reason: "Can cripple defensive walls by trading them the Choice Scarf." }] }
+        };
+
         // --- Utility Functions for Network Resilience ---
         function delay(ms) {
             return new Promise(resolve => setTimeout(resolve, ms));
@@ -421,9 +433,20 @@
         async function getAIStrategyGuide(details) {
             if (pokemonDetailsCache[details.name]?.strategyGuide) return pokemonDetailsCache[details.name].strategyGuide;
 
-            // FIX: If running on external host (persistence disabled), return an error message to suppress the spinner.
+            // FIX: If running on external host (persistence disabled), use Smogon fallback.
             if (!isPersistenceEnabled) {
-                return { error: "AI Strategy Guide generation is disabled on public hosts due to security policy restrictions. Requires full environment access." };
+                const baseName = details.name.split('-')[0]; // Use base name for lookup (e.g., 'charizard' from 'charizard-gmax')
+                const strategy = SMOGON_FALLBACK_DATA[baseName];
+                if (strategy) {
+                    // Make a copy to avoid mutation issues
+                    const formattedStrategy = JSON.parse(JSON.stringify(strategy));
+                    // Smogon data doesn't have "reasons", so we create a simpler moveset display
+                    formattedStrategy.moveset = formattedStrategy.moveset.map(move => ({ name: move.name, reason: move.reason || "Primary STAB/Coverage" }));
+                    pokemonDetailsCache[details.name].strategyGuide = formattedStrategy;
+                    return formattedStrategy;
+                } else {
+                    return { error: "Smogon competitive data for this Pokémon is not available in the local fallback." };
+                }
             }
 
             // Original logic for Canvas environment
@@ -499,24 +522,6 @@
                         <div class="stat-bar-fill h-4 rounded-full bg-yellow-400 text-right pr-2 text-xs font-bold text-gray-900" style="width: 0%;" data-width="${(stat.value / 255) * 100}%">${stat.value}</div>
                     </div></div>`).join('');
 
-            // --- Conditionally Render Modal Content ---
-            let aiSectionHtml = '';
-            if (isPersistenceEnabled) {
-                aiSectionHtml = `
-                    <div id="ai-strategy-section">
-                        <h3 class="font-bold text-lg mb-2 border-b border-gray-700 pb-1">AI Strategy Guide</h3>
-                        <div id="ai-loader" class="flex items-center justify-center space-x-2 py-4">
-                            <div class="loading-dot w-3 h-3 bg-yellow-400 rounded-full"></div><div class="loading-dot w-3 h-3 bg-yellow-400 rounded-full"></div><div class="loading-dot w-3 h-3 bg-yellow-400 rounded-full"></div>
-                        </div>
-                    </div>`;
-            } else {
-                aiSectionHtml = `
-                    <div id="ai-strategy-section" class="text-center py-4">
-                        <p class="text-gray-500 text-sm italic">Competitive Strategy Guide generation is disabled on this public host due to security policy restrictions.</p>
-                    </div>`;
-            }
-
-
             modalContent.innerHTML = `
                 <div class="p-6 relative">
                     <button id="close-modal" class="absolute top-4 right-4 text-gray-400 hover:text-white transition text-3xl leading-none">&times;</button>
@@ -543,7 +548,12 @@
                                 <div id="moves-list" class="max-h-48 overflow-y-auto pr-2 flex flex-wrap gap-2"></div>
                             </div>
                         </div>
-                        ${aiSectionHtml}
+                        <div id="ai-strategy-section">
+                            <h3 class="font-bold text-lg mb-2 border-b border-gray-700 pb-1">Competitive Strategy</h3>
+                            <div id="ai-loader" class="flex items-center justify-center space-x-2 py-4">
+                                <div class="loading-dot w-3 h-3 bg-yellow-400 rounded-full"></div><div class="loading-dot w-3 h-3 bg-yellow-400 rounded-full"></div><div class="loading-dot w-3 h-3 bg-yellow-400 rounded-full"></div>
+                            </div>
+                        </div>
                     </div>
                     <button id="toggle-collection-btn" class="w-full mt-6 py-3 font-bold rounded-lg transition ${isCollected ? 'bg-red-600 hover:bg-red-700' : 'bg-green-600 hover:bg-green-700'}">${isCollected ? 'Remove from Collection' : 'Add to Collection'}</button>
                 </div>`;
@@ -561,19 +571,16 @@
             movesHeader.addEventListener('click', () => { movesContent.classList.toggle('hidden'); movesArrow.classList.toggle('rotate-180'); });
             moveSearchInput.addEventListener('input', (e) => renderMoves(allMoves.filter(move => move.toLowerCase().includes(e.target.value.toLowerCase()))));
             
-            // Only attempt to load strategy if persistence is enabled (Canvas environment)
-            if (isPersistenceEnabled) {
-                const strategy = await getAIStrategyGuide(details);
-                const aiSection = document.getElementById('ai-strategy-section');
-                document.getElementById('ai-loader').style.display = 'none';
-                aiSection.innerHTML += strategy.error ? `<p class="text-red-400 text-center">${strategy.error}</p>` : `<div class="text-sm space-y-2">
-                    <p><strong class="text-gray-400">Recommended Nature:</strong> ${strategy.nature}</p>
-                    <p><strong class="text-gray-400">Suggested Held Item:</strong> ${strategy.heldItem}</p>
-                    ${strategy.evDistribution ? `<p><strong class="text-gray-400">EV Spread:</strong> ${strategy.evDistribution.spread}</p><p><strong class="text-gray-400">IV Priority:</strong> ${strategy.evDistribution.ivs}</p>` : ''}
-                    <p><strong class="text-gray-400">Strategy:</strong> ${strategy.strategy}</p>
-                    <h4 class="font-semibold text-base mt-2">Example Moveset:</h4>
-                    <ul class="list-disc list-inside ml-2">${strategy.moveset.map(m => `<li class="mb-1"><strong class="capitalize text-yellow-400">${m.name.replace(/-/g,' ')}:</strong> <span class="text-gray-300">${m.reason}</span></li>`).join('')}</ul></div>`;
-            }
+            const strategy = await getAIStrategyGuide(details);
+            const aiSection = document.getElementById('ai-strategy-section');
+            document.getElementById('ai-loader').style.display = 'none';
+            aiSection.innerHTML += strategy.error ? `<p class="text-red-400 text-center">${strategy.error}</p>` : `<div class="text-sm space-y-2">
+                <p><strong class="text-gray-400">Recommended Nature:</strong> ${strategy.nature}</p>
+                <p><strong class="text-gray-400">Suggested Held Item:</strong> ${strategy.heldItem}</p>
+                ${strategy.evDistribution ? `<p><strong class="text-gray-400">EV Spread:</strong> ${strategy.evDistribution.spread}</p><p><strong class="text-gray-400">IV Priority:</strong> ${strategy.evDistribution.ivs}</p>` : ''}
+                <p><strong class="text-gray-400">Strategy:</strong> ${strategy.strategy}</p>
+                <h4 class="font-semibold text-base mt-2">Example Moveset:</h4>
+                <ul class="list-disc list-inside ml-2">${strategy.moveset.map(m => `<li class="mb-1"><strong class="capitalize text-yellow-400">${m.name.replace(/-/g,' ')}:</strong> <span class="text-gray-300">${m.reason}</span></li>`).join('')}</ul></div>`;
         }
 
         function closeModal() {
@@ -719,4 +726,5 @@
     </script>
 </body>
 </html>
+
 
