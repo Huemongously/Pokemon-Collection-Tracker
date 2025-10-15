@@ -1,84 +1,77 @@
-const CACHE_NAME = 'pokemon-tracker-cache-v1';
+const CACHE_NAME = 'poke-tracker-cache-v1.1';
 const urlsToCache = [
-  '/',
-  '/index.html',
-  'https://cdn.tailwindcss.com',
-  'https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap'
-];
-
-// URLs for API caching (cache-first strategy)
-const apiUrlsToCache = [
-  'https://pokeapi.co/api/v2/pokemon-species',
-  'https://pokeapi.co/api/v2/version-group',
-  'https://pokeapi.co/api/v2/pokemon/',
-  'https://pokeapi.co/api/v2/pokemon-species/'
+    './index.html', // Crucial: use relative path
+    './manifest.json', // Crucial: use relative path
+    'https://cdn.tailwindcss.com',
+    'https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap',
+    'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js',
+    'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js',
+    'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js'
 ];
 
 self.addEventListener('install', event => {
-  event.waitUntil(
-    caches.open(CACHE_NAME)
-      .then(cache => {
-        console.log('Opened cache');
-        // Add core assets to cache
-        const coreAssets = cache.addAll(urlsToCache);
-        return coreAssets;
-      })
-  );
+    // Perform install steps
+    event.waitUntil(
+        caches.open(CACHE_NAME)
+            .then(cache => {
+                console.log('Opened cache and added essential files.');
+                return cache.addAll(urlsToCache).catch(error => {
+                    console.error('Failed to cache one or more essential assets:', error);
+                });
+            })
+    );
 });
 
 self.addEventListener('fetch', event => {
-  const requestUrl = event.request.url;
-
-  // Strategy: Cache First for API calls, then Network
-  const isApiUrl = apiUrlsToCache.some(url => requestUrl.startsWith(url));
-  
-  if (isApiUrl) {
+    // Serve from cache first, then fall back to network
     event.respondWith(
-      caches.open(CACHE_NAME).then(cache => {
-        return cache.match(event.request).then(response => {
-          const fetchPromise = fetch(event.request).then(networkResponse => {
-            // If we get a valid response, update the cache
-            if (networkResponse && networkResponse.status === 200) {
-              cache.put(event.request, networkResponse.clone());
-            }
-            return networkResponse;
-          }).catch(err => {
-            // Network fetch failed, which is okay if we have a cached response
-            console.warn('Network request failed for:', requestUrl, err);
-          });
+        caches.match(event.request)
+            .then(response => {
+                // Cache hit - return response
+                if (response) {
+                    return response;
+                }
+                // Important: Clone the request before fetching
+                const fetchRequest = event.request.clone();
 
-          // Return cached response if available, otherwise wait for the network
-          return response || fetchPromise;
-        });
-      })
+                return fetch(fetchRequest).then(
+                    response => {
+                        // Check if we received a valid response
+                        if(!response || response.status !== 200 || response.type !== 'basic') {
+                            return response;
+                        }
+
+                        // Important: Clone the response before adding it to the cache
+                        const responseToCache = response.clone();
+
+                        // Cache responses for API calls (PokeAPI) to help with offline functionality
+                        if (event.request.url.includes('pokeapi.co')) {
+                             caches.open(CACHE_NAME)
+                                .then(cache => {
+                                    cache.put(event.request, responseToCache);
+                                });
+                        }
+
+                        return response;
+                    }
+                );
+            })
     );
-  } else {
-    // Strategy: Cache First for static assets
-    event.respondWith(
-      caches.match(event.request)
-        .then(response => {
-          if (response) {
-            return response;
-          }
-          return fetch(event.request);
-        }
-      )
-    );
-  }
 });
 
 self.addEventListener('activate', event => {
-  const cacheWhitelist = [CACHE_NAME];
-  event.waitUntil(
-    caches.keys().then(cacheNames => {
-      return Promise.all(
-        cacheNames.map(cacheName => {
-          if (cacheWhitelist.indexOf(cacheName) === -1) {
-            return caches.delete(cacheName);
-          }
+    // Clear old caches
+    const cacheWhitelist = [CACHE_NAME];
+    event.waitUntil(
+        caches.keys().then(cacheNames => {
+            return Promise.all(
+                cacheNames.map(cacheName => {
+                    if (cacheWhitelist.indexOf(cacheName) === -1) {
+                        return caches.delete(cacheName);
+                    }
+                })
+            );
         })
-      );
-    })
-  );
+    );
 });
 
